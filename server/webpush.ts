@@ -69,8 +69,9 @@ export function vapidAuth(endpoint: string, vapid: Vapid, now = Date.now()) {
 }
 
 /**
- * Sends one message. Resolves the push service's status: 201 delivered (or
- * queued), 404/410 the device is gone for good. Messages with the same
+ * Sends one message. Resolves the push service's status (201 delivered or
+ * queued, 404/410 the device is gone for good) and, when it refused, its
+ * reason in its own words. Messages with the same
  * `topic` replace one another while undelivered (a phone that's off gets the
  * latest about a chat, not each one).
  */
@@ -89,6 +90,7 @@ export async function sendPush(sub: Subscription, message: object, vapid: Vapid,
     body: encrypt(Buffer.from(JSON.stringify(message)), sub),
     signal: AbortSignal.timeout(10_000),
   })
-  await res.body?.cancel().catch(() => {})
-  return res.status
+  const reason = res.ok ? '' : (await res.text().catch(() => '')).trim().slice(0, 300)
+  if (res.ok) await res.body?.cancel().catch(() => {})
+  return { status: res.status, reason }
 }

@@ -335,9 +335,9 @@ async function deliver(hermesId: string, note: Note) {
   await Promise.all(
     list(hermesId).map(async (device) => {
       try {
-        const status = await sendPush(device, note, vapid(), { topic: note.tag })
+        const { status, reason } = await sendPush(device, note, vapid(), { topic: note.tag })
         if (status === 404 || status === 410) remove(device.endpoint)
-        else if (status >= 400) console.warn(`Murmur: a push service turned a note away (${status}).`)
+        else if (status >= 400) console.warn(`Murmur: a push service turned a note away (${status} ${reason}).`)
       } catch (error) {
         console.warn(`Murmur: couldn’t reach a push service (${(error as Error).message}).`)
       }
@@ -403,11 +403,12 @@ export async function handlePush(req: http.IncomingMessage, res: http.ServerResp
     syncWatchers()
     if (known) return reply(res, 200, { ok: true })
     // A new device: say it worked, on the device itself, the first proof that push reaches it.
-    const status = await sendPush(sub, { title: 'Murmur', body: 'Notifications are on.', tag: 'murmur:push', href: '/' } satisfies Note, vapid()).catch(() => 0)
+    const welcome = { title: 'Murmur', body: 'Notifications are on.', tag: 'murmur:push', href: '/' } satisfies Note
+    const { status, reason } = await sendPush(sub, welcome, vapid()).catch((error: Error) => ({ status: 0, reason: error.message }))
     if (status < 200 || status >= 300) {
       remove(sub.endpoint)
       syncWatchers()
-      return reply(res, 502, { error: `The push service didn’t take it (${status || 'unreachable'}).` })
+      return reply(res, 502, { error: `The push service didn’t take it (${status || 'unreachable'}${reason ? `: ${reason}` : ''}).` })
     }
     return reply(res, 200, { ok: true })
   }
