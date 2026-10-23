@@ -45,6 +45,7 @@ final class MurmurPush {
     private static final String TAG = "MurmurPush";
     private static final String PREFS = "murmur";
     private static final String SERVER = "server";
+    private static final String SUBSCRIPTION = "subscription";
     private static final String CHANNEL = "murmur";
     private static final ExecutorService NETWORK = Executors.newSingleThreadExecutor();
 
@@ -99,22 +100,50 @@ final class MurmurPush {
                     UnifiedPush.register(activity, ConstantsKt.INSTANCE_DEFAULT, null, key);
                     return kotlin.Unit.INSTANCE;
                 });
+                postSubscription(activity);
             });
         });
     }
 
-    /** Hands a new endpoint to Murmur, shaped like a browser's PushSubscription.toJSON(). */
+    /** Hands a new endpoint to Murmur, shaped like a browser's PushSubscription.toJSON(), and keeps it to hand over again on every start. */
     static void subscribe(Context context, PushEndpoint endpoint) {
+        if (endpoint.getPubKeySet() == null) return;
+        try {
+            JSONObject keys = new JSONObject()
+                .put("p256dh", endpoint.getPubKeySet().getPubKey())
+                .put("auth", endpoint.getPubKeySet().getAuth());
+            // Chrome's own subscriptions use FCM's /wp/ form now (the library still hands out the legacy /fcm/send/ one); tested working.
+            String url = endpoint.getUrl().replace("https://fcm.googleapis.com/fcm/send/", "https://fcm.googleapis.com/wp/");
+            String body = new JSONObject().put("endpoint", url).put("keys", keys).toString();
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(SUBSCRIPTION, body).apply();
+            postSubscription(context);
+        } catch (Exception e) {
+            Log.w(TAG, "Couldn't read the push endpoint: " + e.getMessage());
+        }
+    }
+
+    /** The kept endpoint, to Murmur: UnifiedPush only reports one when it changes, and Murmur may have lost it. */
+    private static void postSubscription(Context context) {
+        postSubscription(context, 0);
+    }
+
+    // FCM answers 410 for a few minutes after a new registration, so Murmur's first note bounces
+    // and it drops the endpoint; a few tries over the next minutes get it in without a restart.
+    private static final long[] RETRY_MS = { 60_000, 3 * 60_000, 10 * 60_000 };
+
+    private static void postSubscription(Context context, int attempt) {
         String server = server(context);
-        if (server == null || endpoint.getPubKeySet() == null) return;
+        String body = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(SUBSCRIPTION, null);
+        if (server == null || body == null) return;
         NETWORK.execute(() -> {
             try {
-                JSONObject keys = new JSONObject()
-                    .put("p256dh", endpoint.getPubKeySet().getPubKey())
-                    .put("auth", endpoint.getPubKeySet().getAuth());
-                call(server, "POST", "/murmur/push/subscribe", new JSONObject().put("endpoint", endpoint.getUrl()).put("keys", keys).toString());
+                call(server, "POST", "/murmur/push/subscribe", body);
+                Log.i(TAG, "Murmur has this device's push endpoint");
             } catch (Exception e) {
                 Log.w(TAG, "Murmur didn't take the push endpoint: " + e.getMessage());
+                if (attempt < RETRY_MS.length && e.getMessage() != null && e.getMessage().startsWith("502")) {
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> postSubscription(context, attempt + 1), RETRY_MS[attempt]);
+                }
             }
         });
     }
