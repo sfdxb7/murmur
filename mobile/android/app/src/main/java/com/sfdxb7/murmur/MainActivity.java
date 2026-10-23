@@ -13,6 +13,8 @@ public class MainActivity extends BridgeActivity {
     static final String CHANGE_ADDRESS = "com.sfdxb7.murmur.CHANGE_ADDRESS";
     /** Sent by a tapped notification, with the chat to open as "href" (MurmurPush). */
     static final String OPEN = "com.sfdxb7.murmur.OPEN";
+    /** Sent by the "update available" notification (MurmurUpdate). */
+    static final String UPDATE = "com.sfdxb7.murmur.UPDATE";
 
     private boolean pushSynced = false;
 
@@ -51,6 +53,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         MurmurPush.onScreen = true;
+        MurmurUpdate.check(this);
     }
 
     @Override
@@ -63,6 +66,7 @@ public class MainActivity extends BridgeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (bridge == null || intent == null) return;
+        if (UPDATE.equals(intent.getAction())) MurmurUpdate.install(this);
         // Back to the bundled page (www/index.html), which shows its form instead of opening the saved address.
         if (CHANGE_ADDRESS.equals(intent.getAction())) {
             bridge.getWebView().loadUrl(bridge.getLocalUrl() + "/?change");
