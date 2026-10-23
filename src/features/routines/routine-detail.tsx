@@ -13,8 +13,7 @@ import { Markdown } from '@/features/chat/lazy-markdown'
 import type { Agent } from '@/state/agents'
 import { useQueries } from '@tanstack/react-query'
 import {
-  fetchRunResult,
-  runResultKey,
+  runResultQuery,
   useJobRuns,
   useRoutineActions,
   useRoutines,
@@ -259,11 +258,7 @@ export function RoutineRunsList({
   const running = useRunningNow((s) => Boolean(s.ids[routine.id]))
   const [openId, setOpenId] = useState<string | null>(openRunId ?? null)
   const results = useQueries({
-    queries: (runs.data ?? []).map((run) => ({
-      queryKey: runResultKey(agentId, run),
-      queryFn: () => fetchRunResult(agentId, run.id),
-      staleTime: Infinity,
-    })),
+    queries: (runs.data ?? []).map((run) => runResultQuery(agentId, run)),
   })
   const resultOf = new Map((runs.data ?? []).map((run, i) => [run.id, results[i]?.data]))
   // Opening a run reopens it in Hermes, so one that has had its say isn't still going, whatever Hermes says.

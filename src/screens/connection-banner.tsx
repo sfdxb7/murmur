@@ -37,7 +37,10 @@ function usePhase(down: boolean, everOpened: boolean, hold: boolean) {
   // Counted from when Hermes went away, not from when the splash let go, so a
   // cold start that already waited on the splash doesn't wait all over again.
   const since = useRef(0)
-  if (!down) since.current = 0
+  // Time away doesn't count either: a phone cuts a hidden page's socket, and
+  // coming back it redials at once, so only a wait that starts on screen shows.
+  const looking = useLooking()
+  if (!down || !looking) since.current = 0
   else if (!since.current) since.current = Date.now()
 
   // Its own effect: the one below re-runs when `everOpened` or `hold` change,
@@ -54,6 +57,7 @@ function usePhase(down: boolean, everOpened: boolean, hold: boolean) {
       return
     }
     if (hold) return
+    if (!looking) return void setPhase('hidden')
     const waited = Date.now() - since.current
     const trying = everOpened ? 'reconnecting' : 'connecting'
     const show = setTimeout(() => setPhase((p) => (p === 'lost' ? p : trying)), Math.max(0, 1500 - waited))
@@ -64,9 +68,20 @@ function usePhase(down: boolean, everOpened: boolean, hold: boolean) {
       clearTimeout(show)
       clearTimeout(give)
     }
-  }, [down, everOpened, hold])
+  }, [down, everOpened, hold, looking])
 
   return phase
+}
+
+/** Whether the page is on screen. */
+function useLooking() {
+  const [looking, setLooking] = useState(() => document.visibilityState === 'visible')
+  useEffect(() => {
+    const sync = () => setLooking(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', sync)
+    return () => document.removeEventListener('visibilitychange', sync)
+  }, [])
+  return looking
 }
 
 /** The pill itself; `phase` drives it (exported for the UI lab). */

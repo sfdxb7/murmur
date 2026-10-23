@@ -12,6 +12,7 @@ import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstac
 import { useMemo, useRef } from 'react'
 import { create } from 'zustand'
 import { api, HermesError } from '@/hermes/rest'
+import { scoped } from '@/hermes/instance'
 import { agentZone, ensureAgentTimezone } from '@/state/timezone'
 import {
   dayPreset,
@@ -357,6 +358,51 @@ export function useJobRuns(agentId: string, routineId: string | undefined) {
 export const runResultKey = (agentId: string, run: { id: string; lastAt: number }) =>
   ['routine-run-result', agentId, run.id, run.lastAt] as const
 
+// Since a run that hasn't moved never changes, this device keeps what came of
+// it: an agent's page otherwise reads every routine's newest runs (each one's
+// last messages, tool output and all) again on every start. The newest KEEP
+// are kept; older ones are just read again if they're ever shown.
+const SAVED = scoped('murmur:run-results')
+const KEEP = 200
+let saved: Map<string, RunResult> | undefined
+
+function savedResults() {
+  if (!saved) {
+    try {
+      saved = new Map(JSON.parse(localStorage.getItem(SAVED) ?? '[]'))
+    } catch {
+      saved = new Map()
+    }
+  }
+  return saved
+}
+
+function saveResult(key: string, result: RunResult) {
+  const all = savedResults()
+  all.delete(key)
+  all.set(key, result)
+  for (const old of all.keys()) {
+    if (all.size <= KEEP) break
+    all.delete(old)
+  }
+  try {
+    localStorage.setItem(SAVED, JSON.stringify([...all]))
+  } catch {
+    /* storage full or unavailable: results are read from Hermes as before */
+  }
+}
+
+/** The query for what came of a run, answered from this device when it has read it before. */
+export function runResultQuery(agentId: string, run: { id: string; lastAt: number }) {
+  const key = `${agentId}/${run.id}@${run.lastAt}`
+  return {
+    queryKey: runResultKey(agentId, run),
+    queryFn: () => fetchRunResult(agentId, run.id).then((result) => (saveResult(key, result), result)),
+    initialData: () => savedResults().get(key),
+    staleTime: Infinity,
+  }
+}
+
 export async function fetchRunResult(agentId: string, runId: string): Promise<RunResult> {
   type Row = { id?: number; timestamp?: number; role?: string; content?: string | null }
   const res = await api.get<{ messages?: Row[] }>(
@@ -408,12 +454,7 @@ export function useRoutineNews(agentId: string | undefined) {
   }
   const read = [...byRoutine.values()].flat()
   const results = useQueries({
-    queries: read.map((run) => ({
-      queryKey: runResultKey(agentId ?? '', run),
-      queryFn: () => fetchRunResult(agentId!, run.id),
-      staleTime: Infinity,
-      enabled: Boolean(agentId),
-    })),
+    queries: read.map((run) => ({ ...runResultQuery(agentId ?? '', run), enabled: Boolean(agentId) })),
   })
   const resultOf = new Map(read.map((run, i) => [run.id, results[i]?.data]))
   const loaded = results.every((r) => !r.isPending)
@@ -451,12 +492,7 @@ export function useContinuedRuns(agentId: string | undefined) {
   const runs = useRoutineRuns(agentId)
   const open = (runs.data ?? []).filter((run) => !run.finished)
   const results = useQueries({
-    queries: open.map((run) => ({
-      queryKey: runResultKey(agentId ?? '', run),
-      queryFn: () => fetchRunResult(agentId!, run.id),
-      staleTime: Infinity,
-      enabled: Boolean(agentId),
-    })),
+    queries: open.map((run) => ({ ...runResultQuery(agentId ?? '', run), enabled: Boolean(agentId) })),
   })
   const replied = open.filter((_, i) => results[i]?.data?.replied)
   const key = replied.map((run) => `${run.id}@${run.lastAt}:${run.routineName}`).join('|')
