@@ -4,7 +4,8 @@
   "description": "Murmur for Android (and later iOS): a native shell around the Murmur on your Umbrel",
   "scripts": {
     "sync": "cap sync",
-    "apk": "cap sync android && cd android && ./gradlew assembleDebug"
+    "apk": "cap sync android && cd android && ./gradlew assembleDebug",
+    "apk:release": "cap sync android && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",

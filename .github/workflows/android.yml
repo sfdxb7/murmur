@@ -75,16 +75,21 @@ jobs:
       # Every APK has to be signed by the same key, or Android won't install it over the last one.
       - name: Signing key
         env:
-          KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+          KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
-          test -n "$KEYSTORE" || { echo 'Add the DEBUG_KEYSTORE_B64 secret first.'; exit 1; }
-          mkdir -p ~/.android && echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
-      - run: npm run apk
+          test -n "$KEYSTORE" || { echo 'Add the RELEASE_KEYSTORE_B64 and RELEASE_KEYSTORE_PASSWORD secrets first.'; exit 1; }
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - run: npm run apk:release
+        env:
+          RELEASE_KEYSTORE: ${{ runner.temp }}/release.jks
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          # Above the hand-built debug installs (1), and higher every run.
+          VERSION_CODE: ${{ github.run_number }}0
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="android-${{ github.run_number }}"
-          cp android/app/build/outputs/apk/debug/app-debug.apk murmur.apk
+          cp android/app/build/outputs/apk/release/app-release.apk murmur.apk
           gh release create "$tag" murmur.apk --target "$GITHUB_SHA" --title "Murmur for Android ($tag)" \
             --notes "Built from ${GITHUB_SHA::7}. Install with Obtainium, or download murmur.apk on the phone."

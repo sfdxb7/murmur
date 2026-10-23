@@ -7,8 +7,9 @@ android {
         applicationId "com.sfdxb7.murmur"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI numbers each build (android.yml), so every release installs over the last.
+        versionCode((System.getenv("VERSION_CODE") ?: "1").toInteger())
+        versionName("1.0." + (System.getenv("VERSION_CODE") ?: "0"))
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // The release key lives outside the repo: CI writes it from the RELEASE_KEYSTORE_B64 secret
+    // and passes its path and password in. Lose it and installed apps can no longer update.
+    signingConfigs {
+        release {
+            storeFile System.getenv("RELEASE_KEYSTORE") ? file(System.getenv("RELEASE_KEYSTORE")) : null
+            storePassword System.getenv("RELEASE_KEYSTORE_PASSWORD")
+            keyAlias "murmur"
+            keyPassword System.getenv("RELEASE_KEYSTORE_PASSWORD")
+        }
+    }
     buildTypes {
         release {
+            signingConfig System.getenv("RELEASE_KEYSTORE") ? signingConfigs.release : null
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
