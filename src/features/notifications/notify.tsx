@@ -102,6 +102,15 @@ export function useSystemNotifications() {
       if (note && !looking(latest.current.location === note.href)) showNote(note, latest.current.navigate)
     }
   }, [groups])
+
+  // A pushed note clicked while this page is open: the service worker brings it forward and says where (public/sw.js).
+  useEffect(() => {
+    const open = (e: MessageEvent) => {
+      if (e.data?.type === 'murmur:open' && typeof e.data.href === 'string') latest.current.navigate(e.data.href)
+    }
+    navigator.serviceWorker?.addEventListener('message', open)
+    return () => navigator.serviceWorker?.removeEventListener('message', open)
+  }, [])
 }
 
 /**

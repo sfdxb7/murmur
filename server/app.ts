@@ -12,6 +12,7 @@ import { handleConnection, hermesFor, onDrop, syncHermesCookie } from './connect
 import { accepted, hostAllowed, originAllowed, requestUrl, sendJson } from './http.ts'
 import { isOAuthReturn } from './oauth-return.ts'
 import { createProxy, refuse } from './proxy.ts'
+import { handlePush, startPush, stopPush } from './push.ts'
 import { handleSetup, setupSettled, startSetup } from './setup.ts'
 import { handleTelegram, startTelegram, stopTelegram } from './telegram.ts'
 
@@ -203,12 +204,16 @@ export function startServer(options: ServerOptions = {}): Promise<RunningServer>
   startSetup()
   // Telegram setups a restart interrupted carry on once the Hermes is settled.
   void setupSettled().then(startTelegram)
+  // So do push notifications' watchers, one per Hermes that has a device (push.ts).
+  void setupSettled().then(startPush)
   const staticDir = resolve(env.STATIC_DIR ?? 'dist')
   const carriesHeader = headerCheck(options.requireHeader)
 
   const proxy = createProxy(hermesFor)
   const unsubscribe = [
     onDrop((hermes) => proxy.closeWhere((owner) => owner.hermes === hermes)),
+    // A Hermes that's gone or changed: its watcher goes, or starts again on the new one.
+    onDrop(() => setTimeout(startPush)),
     onSignOut((session) => proxy.closeWhere((owner) => owner.session === session)),
   ]
 
@@ -237,6 +242,7 @@ export function startServer(options: ServerOptions = {}): Promise<RunningServer>
       if (await handleSetup(req, res, path)) return
       if (await handleConnection(req, res, path)) return
       if (await handleTelegram(req, res, path)) return
+      if (await handlePush(req, res, path)) return
       if (path === '/murmur/local') return sendJson(res, 200, { servers: await discoverLocal() })
       sendJson(res, 404, { error: 'not_found' })
     } catch (error) {
@@ -271,6 +277,7 @@ export function startServer(options: ServerOptions = {}): Promise<RunningServer>
     new Promise<void>((done) => {
       for (const fn of unsubscribe) fn()
       stopTelegram()
+      stopPush()
       proxy.closeWhere(() => true)
       server.close(() => done())
       server.closeAllConnections()
