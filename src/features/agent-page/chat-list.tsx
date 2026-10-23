@@ -12,8 +12,8 @@ import { SearchField } from '@/features/search/search-field'
 import { shortTime } from '@/features/home/time'
 import { useUnread, type AgentChat } from './chats'
 
-// Every chat with this agent: the main chat first, then the most recently
-// active, each with when it last moved, as the roster says it. A routine's
+// Every chat with this agent, the most recently active first (the main chat
+// too, by when it last moved), each with when, as the roster says it. A routine's
 // line is labelled and says what it found. Swipe left (or hold, or hover with
 // a mouse) to delete a conversation; with more than a handful, a search
 // narrows them.
@@ -46,11 +46,8 @@ export function ChatList({
   const [revealed, setRevealed] = useState<string | null>(null)
   const touch = useMedia('(pointer: coarse)')
 
-  const ordered = useMemo(() => {
-    if (!chats) return undefined
-    const main = chats.find((c) => c.main)
-    return main ? [main, ...chats.filter((c) => c !== main)] : chats
-  }, [chats])
+  // A timeline, not a pin: a main chat that's gone quiet sinks below whatever moved since.
+  const ordered = useMemo(() => (chats ? [...chats].sort((a, b) => b.at - a.at) : undefined), [chats])
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q || !ordered) return ordered
