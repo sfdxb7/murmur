@@ -1,0 +1,12 @@
+{
+  "appId": "com.sfdxb7.murmur",
+  "appName": "Murmur",
+  "webDir": "www",
+  "backgroundColor": "#fbfbfa",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": ["*"],
+    "errorPath": "index.html"
+  }
+}

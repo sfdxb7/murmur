@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+  The app's only bundled page. Murmur itself runs on your Umbrel (or wherever its
+  server is), so this asks for its address once and then opens it in the app.
+  Capacitor's errorPath brings you back here when that address can't be reached,
+  which is also how to change it.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Murmur</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #fbfbfa; --fg: #1c1c1a; --muted: #6b6b66; --line: #e2e2dd; --accent: #1c1c1a; --accent-fg: #fff; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #f2f2ef; --muted: #9a9a94; --line: #33332f; --accent: #f2f2ef; --accent-fg: #161615; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+      form { width: 100%; max-width: 380px; display: grid; gap: 12px; }
+      h1 { margin: 0; font-size: 28px; }
+      p { margin: 0; color: var(--muted); }
+      .error { color: #c2410c; }
+      label { font-weight: 600; margin-top: 8px; }
+      input { width: 100%; padding: 12px 14px; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 12px; }
+      button { padding: 12px 14px; font: inherit; font-weight: 600; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-fg); }
+    </style>
+  </head>
+  <body>
+    <form id="connect">
+      <h1>Murmur</h1>
+      <p id="note">Where's your Murmur? On an Umbrel it's usually <b>http://umbrel.local:18793</b>, or your Umbrel's IP address with :18793.</p>
+      <label for="url">Address</label>
+      <input id="url" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="http://umbrel.local:18793" required />
+      <button type="submit">Open Murmur</button>
+    </form>
+    <script>
+      const KEY = 'murmur:server'
+      const input = document.getElementById('url')
+      const note = document.getElementById('note')
+      let saved = null
+      try { saved = localStorage.getItem(KEY) } catch {}
+
+      // errorPath loads this same page without saying why, so a flag set just
+      // before leaving tells a failed open from a fresh launch.
+      // shortcut: if Android recreates the app without killing it, this can show the error once; fine until it bites.
+      const failed = sessionStorage.getItem('murmur:opening') === '1'
+      sessionStorage.removeItem('murmur:opening')
+
+      const open = (url) => {
+        sessionStorage.setItem('murmur:opening', '1')
+        location.replace(url)
+      }
+
+      if (saved && !failed) open(saved)
+      else {
+        input.value = saved || 'http://umbrel.local:18793'
+        if (failed) {
+          note.textContent = `Couldn't reach ${saved}. Check you're on the same network as your Umbrel, or change the address.`
+          note.className = 'error'
+        }
+      }
+
+      document.getElementById('connect').addEventListener('submit', (e) => {
+        e.preventDefault()
+        let url = input.value.trim()
+        if (!/^https?:\/\//i.test(url)) url = `http://${url}`
+        url = url.replace(/\/+$/, '') + '/'
+        try { localStorage.setItem(KEY, url) } catch {}
+        open(url)
+      })
+    </script>
+  </body>
+</html>

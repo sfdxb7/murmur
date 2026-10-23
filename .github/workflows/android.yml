@@ -1,0 +1,87 @@
+# The Android app, kept on this fork's android branch. Two jobs:
+#  - sync: daily, brings getumbrel/murmur's master into master and android.
+#    A merge that conflicts opens an issue instead of pushing.
+#  - apk: when the app's own files change, builds the APK and publishes it as a
+#    release, which Obtainium (or a person) installs from.
+# The APK only wraps the Murmur on your Umbrel, so Murmur's own updates reach
+# the phone when the Umbrel app updates, without a new APK.
+name: Android
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [android]
+    paths: ['mobile/**', '.github/workflows/android.yml']
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: android
+          fetch-depth: 0
+          # GitHub's own token can't push commits that change workflow files,
+          # which upstream's sometimes do; a personal token with `workflow` scope can.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+      - name: Merge upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/getumbrel/murmur.git
+          git fetch upstream master
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo 'Already up to date.'
+            exit 0
+          fi
+          if ! git merge --no-edit upstream/master; then
+            git merge --abort
+            gh issue create --title "Upstream merge conflicts ($(date -u +%F))" \
+              --body "getumbrel/murmur's master no longer merges cleanly into android. Merge it by hand: \`git fetch upstream && git merge upstream/master\`."
+            exit 1
+          fi
+          git push origin refs/remotes/upstream/master:refs/heads/master HEAD:refs/heads/android
+
+  apk:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      # Every APK has to be signed by the same key, or Android won't install it over the last one.
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE" || { echo 'Add the DEBUG_KEYSTORE_B64 secret first.'; exit 1; }
+          mkdir -p ~/.android && echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+      - run: npm run apk
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-${{ github.run_number }}"
+          cp android/app/build/outputs/apk/debug/app-debug.apk murmur.apk
+          gh release create "$tag" murmur.apk --target "$GITHUB_SHA" --title "Murmur for Android ($tag)" \
+            --notes "Built from ${GITHUB_SHA::7}. Install with Obtainium, or download murmur.apk on the phone."
