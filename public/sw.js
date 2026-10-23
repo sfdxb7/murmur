@@ -19,8 +19,10 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
       const pages = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      // Someone's looking at Murmur: the page tells for itself, if at all.
-      if (pages.some((page) => page.visibilityState === 'visible' && page.focused)) return
+      // Someone's looking at Murmur: the page tells for itself, if at all. Except the server's
+      // "Notifications are on", which answers turning them on, on this very screen.
+      const looking = pages.some((page) => page.visibilityState === 'visible' && page.focused)
+      if (looking && note.tag !== 'murmur:push') return
       await self.registration.showNotification(note.title || 'Murmur', {
         body: note.body || '',
         tag: note.tag,
