@@ -1,0 +1,41 @@
+# This fork's own Murmur image, ghcr.io/sfdxb7/murmur: upstream Murmur plus the
+# fork's server changes (like compressing Hermes's JSON). Built on every push to
+# android outside mobile/, and by android.yml's sync after it merges upstream
+# (pushes made with GitHub's own token start no workflows, so it asks for this one).
+# Same steps as upstream's release.yml, without its release bookkeeping.
+name: Image
+
+on:
+  push:
+    branches: [android]
+    paths-ignore: ['mobile/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/sfdxb7/murmur
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

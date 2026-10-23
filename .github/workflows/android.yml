@@ -1,6 +1,7 @@
 # The Android app, kept on this fork's android branch. Two jobs:
-#  - sync: daily, brings getumbrel/murmur's master into master and android.
-#    A merge that conflicts opens an issue instead of pushing.
+#  - sync: daily, brings getumbrel/murmur's master into master and android,
+#    then rebuilds this fork's image (image.yml). A merge that conflicts opens
+#    an issue instead of pushing.
 #  - apk: when the app's own files change, builds the APK and publishes it as a
 #    release, which Obtainium (or a person) installs from.
 # The APK only wraps the Murmur on your Umbrel, so Murmur's own updates reach
@@ -18,6 +19,7 @@ on:
 permissions:
   contents: write
   issues: write
+  actions: write
 
 jobs:
   sync:
@@ -50,6 +52,7 @@ jobs:
             exit 1
           fi
           git push origin refs/remotes/upstream/master:refs/heads/master HEAD:refs/heads/android
+          gh workflow run image.yml --ref android
 
   apk:
     if: github.event_name != 'schedule'
