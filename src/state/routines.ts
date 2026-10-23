@@ -267,18 +267,53 @@ export async function fetchRoutineRuns(agentId: string) {
 /** A chat that's one of a routine's runs, and that routine; null for any other chat. */
 export type RunOf = { routineId?: string } | null
 
-const placed = new Map<string, RunOf>()
+// Kept on this device too (the newest PLACED_KEEP): Home asks about every
+// agent's newest chat, and each answer costs a read of the whole chat's row,
+// so a fresh start only asks about chats it hasn't seen.
+const PLACED = scoped('murmur:runs-of')
+const PLACED_KEEP = 500
+let placed: Map<string, RunOf> | undefined
+let saving = false
+
+function placedRuns() {
+  if (!placed) {
+    try {
+      placed = new Map(JSON.parse(localStorage.getItem(PLACED) ?? '[]'))
+    } catch {
+      placed = new Map()
+    }
+  }
+  return placed
+}
+
 const placedKey = (agentId: string, chatId: string) => `${agentId}\n${chatId}`
 
 /** What's known of a chat without asking: its id, or an earlier answer. */
 function knownRun(agentId: string, chatId: string): RunOf | undefined {
   const routineId = routineIdOf(chatId)
-  return routineId ? { routineId } : placed.get(placedKey(agentId, chatId))
+  return routineId ? { routineId } : placedRuns().get(placedKey(agentId, chatId))
 }
 
 /** What a list already said of a chat, so opening it needn't ask. */
 export function knowRun(agentId: string, chatId: string, run: RunOf) {
-  placed.set(placedKey(agentId, chatId), run)
+  const all = placedRuns()
+  all.delete(placedKey(agentId, chatId))
+  all.set(placedKey(agentId, chatId), run)
+  // A list places dozens at once: written once, after.
+  if (saving) return
+  saving = true
+  setTimeout(() => {
+    saving = false
+    for (const old of all.keys()) {
+      if (all.size <= PLACED_KEEP) break
+      all.delete(old)
+    }
+    try {
+      localStorage.setItem(PLACED, JSON.stringify([...all]))
+    } catch {
+      /* storage full or unavailable: they're asked again next start */
+    }
+  })
 }
 
 /** Whether a chat is one of a routine's runs, and whose. */

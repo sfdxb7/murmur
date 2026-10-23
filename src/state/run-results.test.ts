@@ -29,6 +29,17 @@ describe('what came of a run, kept on this device', () => {
     expect(routines.runResultQuery('work', { ...run, lastAt: 2000 }).initialData()).toBeUndefined()
   })
 
+  it('whether a chat is a run is asked once, and still known after a fresh start', async () => {
+    get.mockResolvedValueOnce({ source: 'cron', cron_job_id: 'job1' } as never)
+    const calls = get.mock.calls.length
+    expect(await routines.runOf('work', 'local-abc')).toEqual({ routineId: 'job1' })
+    await new Promise((r) => setTimeout(r))
+    vi.resetModules()
+    const fresh = await import('./routines')
+    expect(await fresh.runOf('work', 'local-abc')).toEqual({ routineId: 'job1' })
+    expect(get.mock.calls.length).toBe(calls + 1)
+  })
+
   it('keeps only the newest 200', async () => {
     for (let i = 0; i < 205; i++) await routines.runResultQuery('work', { id: `run-${i}`, lastAt: 1 }).queryFn()
     const kept = JSON.parse(store.get('murmur:run-results')!) as [string][]
