@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status-bar icon: Murmur's two buddies, as one flat shape (Android draws it in one colour). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,5C4.2,5 2,7.2 2,10L2,18.5C2,19.3 2.7,20 3.5,20L5.5,20C6.3,20 7,19.3 7,18.5L7,16.5C7,16.2 7.2,16 7.5,16C7.8,16 8,16.2 8,16.5L8,18.5C8,19.3 8.7,20 9.5,20L11,20L11,10C11,7.2 9.6,5 7,5ZM17,5C14.4,5 13,7.2 13,10L13,20L14.5,20C15.3,20 16,19.3 16,18.5L16,16.5C16,16.2 16.2,16 16.5,16C16.8,16 17,16.2 17,16.5L17,18.5C17,19.3 17.7,20 18.5,20L20.5,20C21.3,20 22,19.3 22,18.5L22,10C22,7.2 19.8,5 17,5Z" />
+</vector>

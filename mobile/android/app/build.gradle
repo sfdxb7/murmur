@@ -36,6 +36,9 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // Push with nothing else installed: Web Push from Murmur's server through Google's push service (MurmurPush.java).
+    implementation 'org.unifiedpush.android:connector:3.3.5'
+    implementation 'org.unifiedpush.android:embedded-fcm-distributor:3.1.0'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
