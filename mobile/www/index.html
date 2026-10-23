@@ -27,9 +27,9 @@
   <body>
     <form id="connect">
       <h1>Murmur</h1>
-      <p id="note">Where's your Murmur? On an Umbrel it's usually <b>http://umbrel.local:18793</b>, or your Umbrel's IP address with :18793.</p>
-      <label for="url">Address</label>
-      <input id="url" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="http://umbrel.local:18793" required />
+      <p id="note">The address you open <b>Murmur</b> at in your browser, like https://murmur.example.com. Not your Hermes: Murmur asks for that itself, next. To change this later, long-press the app icon.</p>
+      <label for="url">Murmur's address</label>
+      <input id="url" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="https://murmur.example.com" required />
       <button type="submit">Open Murmur</button>
     </form>
     <script>
@@ -50,11 +50,13 @@
         location.replace(url)
       }
 
-      if (saved && !failed) open(saved)
+      // ?change: sent by the "Change address" shortcut (MainActivity.java).
+      const changing = new URLSearchParams(location.search).has('change')
+      if (saved && !failed && !changing) open(saved)
       else {
-        input.value = saved || 'http://umbrel.local:18793'
+        input.value = saved || ''
         if (failed) {
-          note.textContent = `Couldn't reach ${saved}. Check you're on the same network as your Umbrel, or change the address.`
+          note.textContent = `Couldn't reach ${saved}. Check your connection, or change the address.`
           note.className = 'error'
         }
       }
@@ -62,7 +64,7 @@
       document.getElementById('connect').addEventListener('submit', (e) => {
         e.preventDefault()
         let url = input.value.trim()
-        if (!/^https?:\/\//i.test(url)) url = `http://${url}`
+        if (!/^https?:\/\//i.test(url)) url = `https://${url}`
         url = url.replace(/\/+$/, '') + '/'
         try { localStorage.setItem(KEY, url) } catch {}
         open(url)
