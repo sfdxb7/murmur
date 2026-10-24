@@ -17,6 +17,19 @@ public class MainActivity extends BridgeActivity {
     static final String UPDATE = "com.sfdxb7.murmur.UPDATE";
 
     private boolean pushSynced = false;
+    /** A notification's chat, to open once Murmur has loaded beneath it. */
+    private String pendingHref = null;
+
+    /**
+     * Opens a chat inside Murmur without reloading it, with its agent's chat list beneath
+     * (as Murmur's own back arrow goes), so Back steps to that list and then Home.
+     */
+    private static void goTo(WebView webView, String href) {
+        String list = href.matches("^/chat/[^/]+/.+") ? href.replaceFirst("^/chat/([^/]+)/.*$", "/chats/$1") : null;
+        String js = (list != null ? "history.pushState(null, '', " + org.json.JSONObject.quote(list) + "); " : "")
+            + "history.pushState(null, '', " + org.json.JSONObject.quote(href) + "); dispatchEvent(new PopStateEvent('popstate'))";
+        webView.evaluateJavascript(js, null);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,6 +54,11 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onPageLoaded(WebView webView) {
                 MurmurPush.rememberServer(MainActivity.this, webView.getUrl());
+                String server = MurmurPush.server(MainActivity.this);
+                if (pendingHref != null && server != null && webView.getUrl().startsWith(server + "/")) {
+                    goTo(webView, pendingHref);
+                    pendingHref = null;
+                }
                 if (!pushSynced && MurmurPush.server(MainActivity.this) != null && !webView.getUrl().startsWith("https://localhost")) {
                     pushSynced = true;
                     MurmurPush.sync(MainActivity.this);
@@ -79,10 +97,11 @@ public class MainActivity extends BridgeActivity {
             String at = webView.getUrl();
             if (at != null && at.startsWith(server + "/")) {
                 // Already open: go there the way Murmur's own links do, without reloading it.
-                String to = org.json.JSONObject.quote(href);
-                webView.evaluateJavascript("history.pushState(null, '', " + to + "); dispatchEvent(new PopStateEvent('popstate'))", null);
+                goTo(webView, href);
             } else {
-                webView.loadUrl(server + href);
+                // Not open yet: Murmur first, then the chat on top of it, so Back has somewhere to go.
+                pendingHref = href;
+                webView.loadUrl(server + "/");
             }
         }
     }
