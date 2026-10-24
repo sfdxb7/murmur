@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useLocation } from 'wouter'
-import { ArrowUpRight, ChevronRight } from 'lucide-react'
+import { ArrowUpRight, ChevronRight, RefreshCw } from 'lucide-react'
+import { android } from '@/lib/android'
 import { ListGroup, ListRow } from '@/ui/list'
 import { Segmented } from '@/ui/segmented'
 import { Orb } from '@/ui/orb'
@@ -173,6 +174,21 @@ function Root() {
       <Appearance />
 
       <NotificationsSetting />
+
+      {android && (
+        <ListGroup footer="The app updates from GitHub. Murmur itself updates on its server.">
+          <ListRow
+            icon={
+              <Tile>
+                <RefreshCw size={18} />
+              </Tile>
+            }
+            title="Check for updates"
+            subtitle={`Murmur for Android ${android.version()}`}
+            onClick={() => android!.checkForUpdates()}
+          />
+        </ListGroup>
+      )}
 
       {session.session?.required && (
         <ListGroup>

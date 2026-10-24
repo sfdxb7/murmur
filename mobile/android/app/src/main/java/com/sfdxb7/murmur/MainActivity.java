@@ -3,6 +3,7 @@ package com.sfdxb7.murmur;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
@@ -103,6 +104,23 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
         });
+        // What Murmur's page may ask of the app (src/lib/android.ts): its version, and an update check
+        // for Settings' "Check for updates". Only Murmur loads in the app (above), so only it can ask.
+        bridge.getWebView().addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public String version() {
+                try {
+                    return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                } catch (Exception e) {
+                    return "";
+                }
+            }
+
+            @JavascriptInterface
+            public void checkForUpdates() {
+                runOnUiThread(() -> MurmurUpdate.install(MainActivity.this));
+            }
+        }, "murmurAndroid");
         // Once Murmur itself has loaded (signed in or not), keep its address and set up push once per launch.
         bridge.addWebViewListener(new WebViewListener() {
             @Override
