@@ -1,10 +1,13 @@
 package com.sfdxb7.murmur;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebViewClient;
 import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
@@ -74,6 +77,30 @@ public class MainActivity extends BridgeActivity {
                 webView.evaluateJavascript(UP, (result) -> {
                     if (result == null || "\"home\"".equals(result) || "null".equals(result)) leave(this);
                 });
+            }
+        });
+        // Only Murmur itself opens in the app, where its pages reach the app's native side: any other
+        // page (a link in a reply, an app's sign-in) goes to the browser. The bundled setup page may
+        // open whatever address the person typed, which then becomes Murmur's (MurmurPush.rememberServer).
+        bridge.setWebViewClient(new BridgeWebViewClient(bridge) {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri url = request.getUrl();
+                String scheme = url.getScheme();
+                String server = MurmurPush.server(MainActivity.this);
+                String from = view.getUrl();
+                boolean ours = !request.isForMainFrame()
+                    || "data".equals(scheme) || "blob".equals(scheme)
+                    || "localhost".equals(url.getHost())
+                    || (from != null && from.startsWith("https://localhost"))
+                    || (server != null && url.toString().startsWith(server + "/"));
+                if (ours) return super.shouldOverrideUrlLoading(view, request);
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, url));
+                } catch (Exception e) {
+                    // Nothing to open it with: stay put.
+                }
+                return true;
             }
         });
         // Once Murmur itself has loaded (signed in or not), keep its address and set up push once per launch.
