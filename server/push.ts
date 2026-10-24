@@ -363,8 +363,10 @@ async function deliver(hermesId: string, note: Note) {
     list(hermesId).map(async (device) => {
       try {
         const { status, reason } = await sendPush(device, note, vapid(), { topic: note.tag })
-        if (status === 404 || status === 410) remove(device.endpoint)
-        else if (status >= 400) console.warn(`Murmur: a push service turned a note away (${status} ${reason}).`)
+        if (status === 404 || status === 410) {
+          remove(device.endpoint)
+          console.warn(`Murmur: a push service says a device is gone (${status} ${reason}); it's dropped until it subscribes again.`)
+        } else if (status >= 400) console.warn(`Murmur: a push service turned a note away (${status} ${reason}).`)
       } catch (error) {
         console.warn(`Murmur: couldn’t reach a push service (${(error as Error).message}).`)
       }
