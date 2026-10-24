@@ -154,18 +154,40 @@ const chatHref = (profile: string, id: string) => `/chat/${encodeURIComponent(pr
 
 // ── Watching one Hermes ─────────────────────────────────────────────────────
 
-type LiveRow = { session_key: string; status: string; title?: string }
+type LiveRow = { session_key: string; status: string; title?: string; message_count?: number; last_active?: number }
 type Owner = { profile: string; run: boolean; title: string }
 type Moment = { kind: 'finished' | 'needs-you'; id: string }
+/** A live session as one look saw it. `at` is Hermes's last_active (seconds). */
+export type Seen = { status: 'working' | 'waiting' | 'idle'; count: number; at: number }
 
 const BUSY = new Set(['working', 'waiting', 'starting'])
 
-/** Which live sessions just finished or started waiting, between two looks. Pure; see push.test.ts. */
-export function moments(before: Map<string, string> | null, now: Map<string, string>): Moment[] {
+export const seenOf = (r: LiveRow): Seen => ({
+  status: r.status === 'waiting' ? 'waiting' : BUSY.has(r.status) ? 'working' : 'idle',
+  count: r.message_count ?? 0,
+  at: r.last_active ?? 0,
+})
+
+/**
+ * Which live sessions just finished or started waiting, between two looks.
+ * A reply can start and finish between them (a quick one, or events missed),
+ * so an idle session also counts as finished when it has more messages than
+ * last time, or when it's new to the list and moved since the last look
+ * (`since`, seconds); one that's only just been opened hasn't moved. Pure;
+ * see push.test.ts.
+ */
+export function moments(before: Map<string, Seen> | null, now: Map<string, Seen>, since = 0): Moment[] {
   if (!before) return [] // The first look only remembers.
   const out: Moment[] = []
-  for (const id of before.keys()) if (!now.has(id)) out.push({ kind: 'finished', id })
-  for (const [id, status] of now) if (status === 'waiting' && before.get(id) !== 'waiting') out.push({ kind: 'needs-you', id })
+  for (const [id, was] of before) {
+    const is = now.get(id)
+    if (was.status !== 'idle' && (!is || is.status === 'idle')) out.push({ kind: 'finished', id })
+    else if (was.status === 'idle' && is?.status === 'idle' && is.count > was.count) out.push({ kind: 'finished', id })
+  }
+  for (const [id, is] of now) {
+    if (!before.has(id) && is.status === 'idle' && is.count > 0 && is.at > since) out.push({ kind: 'finished', id })
+    if (is.status === 'waiting' && before.get(id)?.status !== 'waiting') out.push({ kind: 'needs-you', id })
+  }
   return out
 }
 
@@ -174,7 +196,8 @@ export function createWatcher(hermes: Hermes, tell: (note: Note) => void) {
   let stopped = false
   let attempt = 0
   let next = 0
-  let live: Map<string, string> | null = null
+  let live: Map<string, Seen> | null = null
+  let lookedAt = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let debounce: ReturnType<typeof setTimeout> | undefined
   const waiting = new Map<string, { done: (result: unknown) => void; fail: (error: Error) => void }>()
@@ -252,12 +275,16 @@ export function createWatcher(hermes: Hermes, tell: (note: Note) => void) {
     if (stopped || socket?.readyState !== WebSocket.OPEN) return
     clearTimeout(timer)
     try {
+      const startedAt = Date.now() / 1000
       const { sessions } = await rpc<{ sessions: LiveRow[] }>('session.active_list')
-      const now = new Map(sessions.filter((r) => BUSY.has(r.status)).map((r) => [r.session_key, r.status === 'waiting' ? 'waiting' : 'working']))
-      const found = moments(live, now)
+      const now = new Map(sessions.map((r) => [r.session_key, seenOf(r)]))
+      // Hermes's clock is this server's on one host; a couple of seconds' slack covers the rest.
+      const found = moments(live, now, lookedAt - 2)
       live = now
+      lookedAt = startedAt
       for (const moment of found) void noteFor(moment).then((note) => note && tell(note), () => {})
-      timer = setTimeout(() => void look(), now.size ? 3_000 : 30_000)
+      const busy = [...now.values()].some((s) => s.status !== 'idle')
+      timer = setTimeout(() => void look(), busy ? 3_000 : 30_000)
     } catch {
       timer = setTimeout(() => void look(), 30_000)
     }

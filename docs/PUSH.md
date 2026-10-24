@@ -30,7 +30,7 @@ One per Hermes with at least one device, and none otherwise, so a Murmur nobody 
 
 It does what the page does for chats running elsewhere (`src/state/status.ts`): on `sessions.changed`, and every few seconds while anything is busy, it reads `session.active_list`.
 
-- A session that was busy and isn't has **finished**. The note is the agent's name and the first line of its last reply.
+- A session that was busy and isn't has **finished**. The note is the agent's name and the first line of its last reply. A quick reply can start and finish between two looks, so an idle session also counts when its message count has grown, or when it's new to the list and moved since the last look. A chat that was only opened hasn't moved, so it doesn't count.
 - A session that starts **waiting** needs the person: "Needs your OK".
 - A **routine's run** that finishes is told with the routine's name and what it found. If it had nothing to report (Hermes's silence markers, `isQuiet`), there's no note, just as Hermes keeps it from Telegram.
 - A session that isn't in any agent's chat list, like a group's, gets no note.

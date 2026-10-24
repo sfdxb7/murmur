@@ -2,17 +2,20 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { agentName, createDevices, firstLine, isQuiet, moments } from './push.ts'
+import { agentName, createDevices, firstLine, isQuiet, moments, type Seen } from './push.ts'
 
-const live = (entries: [string, string][]) => new Map(entries)
+// [id, status, messages, last active (seconds)]
+const live = (entries: [string, Seen['status'], number?, number?][]) =>
+  new Map(entries.map(([id, status, count = 2, at = 100]) => [id, { status, count, at }]))
 
 describe('what’s worth a notification, between two looks at Hermes', () => {
   it('nothing on the first look, whatever is busy', () => {
     expect(moments(null, live([['a', 'working'], ['b', 'waiting']]))).toEqual([])
   })
 
-  it('a chat that was busy and isn’t has finished', () => {
+  it('a chat that was busy and isn’t has finished, gone from the list or idle in it', () => {
     expect(moments(live([['a', 'working']]), live([]))).toEqual([{ kind: 'finished', id: 'a' }])
+    expect(moments(live([['a', 'working']]), live([['a', 'idle']]))).toEqual([{ kind: 'finished', id: 'a' }])
   })
 
   it('one that starts waiting needs the person, once', () => {
@@ -20,8 +23,20 @@ describe('what’s worth a notification, between two looks at Hermes', () => {
     expect(moments(live([['a', 'waiting']]), live([['a', 'waiting']]))).toEqual([])
   })
 
-  it('a chat still at work says nothing', () => {
+  it('a chat still at work, or idle as it was, says nothing', () => {
     expect(moments(live([['a', 'working']]), live([['a', 'working'], ['b', 'working']]))).toEqual([])
+    expect(moments(live([['a', 'idle', 4]]), live([['a', 'idle', 4]]))).toEqual([])
+  })
+
+  it('a quick reply that started and finished between looks still counts', () => {
+    // An idle chat with more messages than last time.
+    expect(moments(live([['a', 'idle', 4]]), live([['a', 'idle', 6]]))).toEqual([{ kind: 'finished', id: 'a' }])
+    // A brand-new chat that's already answered, and moved since the last look.
+    expect(moments(live([]), live([['n', 'idle', 2, 150]]), 120)).toEqual([{ kind: 'finished', id: 'n' }])
+  })
+
+  it('an old chat that was only opened says nothing', () => {
+    expect(moments(live([]), live([['old', 'idle', 40, 90]]), 120)).toEqual([])
   })
 })
 
