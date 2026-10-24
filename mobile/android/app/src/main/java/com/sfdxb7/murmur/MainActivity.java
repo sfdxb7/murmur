@@ -21,6 +21,28 @@ public class MainActivity extends BridgeActivity {
     private String pendingHref = null;
 
     /**
+     * One step up in Murmur: an open sheet or dialog closes first; a chat goes to its agent's
+     * chats, Settings' pages to Settings, any other screen Home. Answers "home" when already there.
+     */
+    private static final String UP =
+        "(() => {" +
+        "  if (document.querySelector('[role=\"dialog\"][data-state=\"open\"], [role=\"alertdialog\"][data-state=\"open\"]')) {" +
+        "    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return 'closed' }" +
+        "  const p = location.pathname;" +
+        "  const up = /^\\/chat\\/[^/]+\\/.+/.test(p) ? p.replace(/^\\/chat\\/([^/]+)\\/.*$/, '/chats/$1')" +
+        "    : /^\\/settings\\/.+/.test(p) ? '/settings' : p === '/' ? null : '/';" +
+        "  if (!up) return 'home';" +
+        "  history.replaceState(null, '', up); dispatchEvent(new PopStateEvent('popstate')); return 'up'" +
+        "})()";
+
+    /** Out of the app, as Android's own Back would. */
+    private void leave(OnBackPressedCallback callback) {
+        callback.setEnabled(false);
+        getOnBackPressedDispatcher().onBackPressed();
+        callback.setEnabled(true);
+    }
+
+    /**
      * Opens a chat inside Murmur without reloading it, with its agent's chat list beneath
      * (as Murmur's own back arrow goes), so Back steps to that list and then Home.
      */
@@ -34,19 +56,24 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Back steps through Murmur's own screens (its router listens for popstate);
-        // only from the first one does it leave the app, as Android would.
+        // Back goes up Murmur's own screens, as its back arrow does (UP below), rather than through
+        // the WebView's history: entries a page adds without a tap, like a notification's chat, are
+        // skipped by Back in Chromium. Only from Home does it leave the app, as Android would.
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 WebView webView = bridge.getWebView();
-                if (webView.canGoBack()) {
-                    webView.goBack();
+                String url = webView.getUrl();
+                String server = MurmurPush.server(MainActivity.this);
+                // Off Murmur (a sign-in page an app opened, say): that page's own history first.
+                if (server == null || url == null || !url.startsWith(server + "/")) {
+                    if (url != null && !url.startsWith("https://localhost") && webView.canGoBack()) webView.goBack();
+                    else leave(this);
                     return;
                 }
-                setEnabled(false);
-                getOnBackPressedDispatcher().onBackPressed();
-                setEnabled(true);
+                webView.evaluateJavascript(UP, (result) -> {
+                    if (result == null || "\"home\"".equals(result) || "null".equals(result)) leave(this);
+                });
             }
         });
         // Once Murmur itself has loaded (signed in or not), keep its address and set up push once per launch.

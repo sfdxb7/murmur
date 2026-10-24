@@ -75,11 +75,16 @@ final class MurmurUpdate {
             );
             return;
         }
-        Toast.makeText(activity, "Downloading the update…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(activity, "Checking for an update…", Toast.LENGTH_SHORT).show();
         NETWORK.execute(() -> {
             try {
                 Release release = latest();
                 if (release == null) throw new Exception("no release");
+                // From the "Check for updates" shortcut there may be nothing newer.
+                if (release.versionCode <= installed(activity)) {
+                    new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(activity, "Murmur is up to date.", Toast.LENGTH_SHORT).show());
+                    return;
+                }
                 File apk = download(activity, release.apk);
                 Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", apk);
                 Intent installer = new Intent(Intent.ACTION_VIEW)

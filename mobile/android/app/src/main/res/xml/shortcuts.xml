@@ -11,4 +11,15 @@
             android:targetPackage="com.sfdxb7.murmur"
             android:targetClass="com.sfdxb7.murmur.MainActivity" />
     </shortcut>
+    <!-- Updates without waiting for the twice-daily check (MurmurUpdate). -->
+    <shortcut
+        android:shortcutId="check_updates"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/check_updates">
+        <intent
+            android:action="com.sfdxb7.murmur.UPDATE"
+            android:targetPackage="com.sfdxb7.murmur"
+            android:targetClass="com.sfdxb7.murmur.MainActivity" />
+    </shortcut>
 </shortcuts>
