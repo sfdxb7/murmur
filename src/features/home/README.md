@@ -16,12 +16,14 @@ The home screen and sidebar. This covers the roster of agents and groups, the si
 - `new-menu.tsx`: `NewMenu`, `menuItem` and `menuKeys`.
 - `suggestion.tsx`: `Suggestion`, a single next step: a second agent, then a group.
 - `install-tip.tsx`: `useInstallTip` and `InstallTip`.
+- `agent-href.ts`: `agentHref`, where an agent's row goes.
 - `time.ts`: `shortTime` ("now", "4m", "Yesterday", "12 Oct") and `greeting`.
 - `bone.tsx`: re-exports `Skeleton` from `src/ui/skeleton` as `Bone`.
 
 ## Invariants
 
 - The roster has one row per agent and one per group, newest activity first.
+- An agent row opens the agent's newest chat. A chat waiting on your answer comes first, and an agent with no chats opens its main chat. The whole row is one link.
 - The roster appears only when there is a second agent or a group. Before that, the solo layout is shown.
 - The agent you are in opens in the sidebar on its own. Choices you make in the sidebar are remembered.
 - Each `Suggestion` and the install tip, once dismissed, stay dismissed (`murmur:tip-dismissed:*`). The install tip shows only on a phone, only after the first chat that got a reply, and never once the app is installed.
