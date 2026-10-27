@@ -60,3 +60,8 @@ All apps share `umbrel_main_network`, and Murmur's server talks to Hermes direct
 - **The Hermes Agent app** (`hermes-agent_web_1:18789`), when it's installed, is offered on first run (`MURMUR_FIND_HERMES`). It runs with `HERMES_UMBREL_APP_PROXY_AUTH=1`, so it trusts every request that reaches its port and puts its per-start dashboard session token in its page. Murmur reads the token from that page, as before, and fetches a fresh one when Hermes restarts.
 
 A session token alone can't gate a Hermes dashboard any more (from 0.22, Hermes won't serve a gated dashboard without a sign-in provider), so the old plan for the Hermes Agent app to export one no longer applies. If it ever drops its app-proxy bypass for a password, Murmur can sign in to it as it does to the built-in.
+
+## Subdirectories & Boundaries
+
+- murmur: [./murmur/README.md](./murmur/README.md) - The umbrel-apps package: store manifest (`umbrel-app.yml`), the `app_proxy`, `web` and private built-in `hermes` services (`docker-compose.yml`), per-install Hermes secrets (`exports.sh`) and the `data/` folders. Its `version` must match `package.json`, and its `hermes` image is the one the contract suite and `dev/docker-compose.yml` use.
+- gallery: [./gallery/README.md](./gallery/README.md) - Store icon and `1.webp`-`8.webp` images (`gallery/murmur/`, mirrored in umbrel-apps-gallery) and the `tools/` screenshot pipeline that runs on a throwaway Hermes with invented demo data.
