@@ -220,6 +220,53 @@ npm run dev:web                                        # the app on :5173, with 
 
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) covers the architecture, server settings, tests, releases and updating the Hermes client. [`docs/DESKTOP.md`](docs/DESKTOP.md) covers the desktop app, and [`docs/DESIGN.md`](docs/DESIGN.md) and [`docs/BRAND.md`](docs/BRAND.md) cover design and brand.
 
+## Murmur Blueprint
+
+### System Overview
+
+Murmur is a mobile-first React 19 + Vite + TypeScript client for [Hermes Agent](https://github.com/NousResearch/hermes-agent), served by a small dependency-free Node server that proxies Hermes and keeps its credentials server-side. The same app ships three ways: standalone or Docker (`server/`), as an Electron desktop app that runs the server in-process (`desktop/`), and as an umbrelOS app with a private built-in Hermes (`umbrel/`). Agents are Hermes profiles and chats are Hermes sessions; Murmur stores almost nothing of its own.
+
+### Local Interface & Invariants
+
+- `vite.config.ts`: build config. Aliases `@` to `src/` and `shiki` to `src/features/chat/shiki.ts`; defines `__MURMUR_VERSION__` from `package.json`; the `murmur:precompress` plugin writes `.br`/`.gz` siblings for text assets over 1 KB that compress by at least 10%; the dev server proxies `/hermes` (with WebSocket) and `/murmur` to `MURMUR_SERVER` (default `http://localhost:3000`).
+- HTML entries: `index.html` (the app, `src/main.tsx`) plus dev-only pages `buddy.html`, `connection.html`, `onboarding.html`, `playground.html`, `routines.html`, `ui.html`.
+- `package.json` scripts: `dev:web`, `dev:server`, `build`, `start`, `typecheck`, `test`, `test:contract`, `desktop:dev|build|dist|icons`.
+- Invariant: `package.json` `version` must equal `umbrel/murmur/umbrel-app.yml` `version`; release workflows reject mismatched tags.
+
+### Subdirectories & System Boundaries
+
+- `src`: [./src/README.md](./src/README.md) - The web app: entry points, routed screens, feature modules, client state, the Hermes gateway client and shared UI.
+- `server`: [./server/README.md](./server/README.md) - Dependency-free Node HTTP server: serves `dist/`, proxies `/hermes/api/*` (REST and WebSocket) with credentials attached server-side, and owns `/murmur/*` (access, setup, connections, Telegram, local models).
+- `desktop`: [./desktop/README.md](./desktop/README.md) - Electron main process, preload bridge, menus, window state and auto-updates; runs `server/app.ts` in-process on loopback.
+- `scripts`: [./scripts/README.md](./scripts/README.md) - `shot.mjs`, a Playwright screenshot utility.
+- `docs`: [./docs/README.md](./docs/README.md) - Developer guides and the Hermes integration specs with their live probe scripts.
+- `umbrel`: [./umbrel/README.md](./umbrel/README.md) - umbrelOS app package (manifest, compose, secrets) and store gallery tooling.
+- `test/contract` - Hermes contract suite run against a real Hermes in Docker (`npm run test:contract`); test-only, no contract file.
+- `design`, `public`, `dev` - Icon sources, static web assets and the local Hermes `docker-compose.yml`; no code, no contract file.
+
+### Global Invariants
+
+- Hermes access tokens and credentials never reach the browser: only `/hermes/api/*` is proxied, and the server strips and re-attaches auth headers.
+- The app talks to Hermes over one JSON-RPC WebSocket per tab (`src/hermes/gateway.ts`) plus the dashboard REST API; both name the tab's pinned Hermes, and switching Hermes reloads the app.
+- `src/hermes/vendor/` is a byte-for-byte copy of Hermes's typed client at the bundled Hermes tag; never edit by hand.
+- `src/ui` is presentational only and never imports `@/state` or `@/hermes` (the dev-only `lab.tsx` excepted); screens hold no domain logic.
+- The server rejects requests from disallowed hosts and origins; the desktop app additionally requires a per-launch random header.
+- The bundled Hermes image in `umbrel/murmur/docker-compose.yml` must match `dev/docker-compose.yml`; the contract harness parses it.
+
+### Global Side Effects
+
+- Reads and writes `DATA_DIR/murmur.json` and `telegram.json` (desktop: Electron `userData`).
+- Outbound HTTP/WebSocket to Hermes instances, discovery candidates and local model servers (Ollama, LocalAI).
+- Through Hermes: creates and edits profiles, sessions, rooms, cron routines, memory, vault items, MCP apps and model config on the Hermes host.
+- Browser `localStorage`/`sessionStorage` (scoped per Hermes), `BroadcastChannel`, notifications and the desktop badge.
+- Desktop release builds poll GitHub Releases for updates.
+
+### System Verification
+
+- Run: `npm test` (Vitest unit tests)
+- Run: `npm run typecheck`
+- Run: `npm run test:contract` (needs Docker; runs against a real Hermes)
+
 ## Contributing
 
 Found a bug, or wish Murmur did something it doesn't? [Open an issue](https://github.com/getumbrel/murmur/issues/new) and tell us about it. We read every one, reply, and work on them.

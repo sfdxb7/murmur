@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, MoreHorizontal, Pencil, PencilLine, Plus, Trash2 } from 'lucide-react'
 import { Orb, OrbStack } from '@/ui/orb'
 import { Button } from '@/ui/button'
-import { fetchAgentChats, useAgentChats, useAgents, type Agent } from '@/state/agents'
+import { fetchAgentChats, useAgents, type Agent } from '@/state/agents'
 import { useAgentStatus, useBusyAgents, useChatUnread, useNeedsYou } from '@/state/status'
 import { prefetchGroup, useGroupSummaries } from '@/state/groups'
 import { useAccessRequests } from '@/state/access'
@@ -14,6 +14,7 @@ import { RequestCard } from '@/features/access/request-card'
 import { cn } from '@/lib/cn'
 import { useGroupRows, type GroupRow } from './groups'
 import { shortTime } from './time'
+import { agentHref } from './agent-href'
 import { Bone } from './bone'
 import { RowMenu, useLongPress } from './row-menu'
 import { setExpanded, useExpanded } from './expanded'
@@ -227,18 +228,7 @@ function AgentRow({
   const warm = () => void qc.prefetchQuery({ queryKey: ['chats', agent.id], queryFn: () => fetchAgentChats(agent.id), staleTime: 10_000 })
   // With the open chat listed beneath, the highlight belongs to it rather than the agent.
   const showsChat = useShowsChat(agent.id, expanded, openChatId)
-  // On a phone's Home, an agent with several chats opens on the list of them; with one it opens straight
-  // into it. What a routine found, when the row shows it, is one of them: the list gives it a line.
-  const conversations = useAgentChats(roomy ? agent.id : undefined).data?.length ?? 0
-  const routine = agent.lastChat?.routine ? agent.lastChat.id : undefined
-  const href =
-    status.state === 'waiting' && status.chatId
-      ? `/chat/${agent.id}/${status.chatId}`
-      : conversations + (routine ? 1 : 0) > 1
-        ? `/chats/${agent.id}`
-        : routine
-          ? `/chat/${agent.id}/${routine}`
-          : `/chat/${agent.id}`
+  const href = agentHref(agent.id, status.state === 'waiting' ? status.chatId : undefined, agent.lastChat?.id)
   const active = Boolean(status.activity && status.state !== 'idle' && status.state !== 'done')
   const unread = useChatUnread(agent.lastChat?.id, agent.lastChat?.at) && !active
 
