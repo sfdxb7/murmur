@@ -231,16 +231,19 @@ function AgentRow({
   // into it. What a routine found, when the row shows it, is one of them: the list gives it a line.
   const conversations = useAgentChats(roomy ? agent.id : undefined).data?.length ?? 0
   const routine = agent.lastChat?.routine ? agent.lastChat.id : undefined
+  const active = Boolean(status.activity && status.state !== 'idle' && status.state !== 'done')
+  const unread = useChatUnread(agent.lastChat?.id, agent.lastChat?.at) && !active
+  // Something new opens straight into the chat the row's line names, not the list around it.
   const href =
     status.state === 'waiting' && status.chatId
       ? `/chat/${agent.id}/${status.chatId}`
-      : conversations + (routine ? 1 : 0) > 1
-        ? `/chats/${agent.id}`
-        : routine
-          ? `/chat/${agent.id}/${routine}`
-          : `/chat/${agent.id}`
-  const active = Boolean(status.activity && status.state !== 'idle' && status.state !== 'done')
-  const unread = useChatUnread(agent.lastChat?.id, agent.lastChat?.at) && !active
+      : unread && agent.lastChat
+        ? `/chat/${agent.id}/${agent.lastChat.id}`
+        : conversations + (routine ? 1 : 0) > 1
+          ? `/chats/${agent.id}`
+          : routine
+            ? `/chat/${agent.id}/${routine}`
+            : `/chat/${agent.id}`
 
   const subtitle = active ? (
     <span className={cn(status.state === 'waiting' ? 'font-medium text-accent' : 'text-shimmer')}>
