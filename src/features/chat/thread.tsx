@@ -22,7 +22,7 @@ import { RichText } from '@/features/media/rich-text'
 import { UserAttachments } from '@/features/media/attachments'
 import { ToolMedia } from '@/features/media/tool-media-view'
 import { MediaProvider, type MediaContext } from '@/features/media/context'
-import { mediaPathsOf, proseOf } from '@shared/message.ts'
+import { mediaPathsOf } from '@shared/message.ts'
 import { ApprovalCard } from './approval-card'
 import { ClarifyCard } from './clarify-card'
 import { SecretCard } from './secret-card'
@@ -30,12 +30,14 @@ import { MessageActions } from './message-actions'
 import { MentionText, MentionsProvider } from './mention'
 import { MessageMenu, useLongPress, type MenuAction } from './message-menu'
 import { useCopy } from './use-copy'
+import { clipboardText, copyMessage } from './copy-message'
+import { CopyHold } from './copy-hold'
 import { AsideCard, CommandCard } from './side-cards'
 import { ERROR_ACTION_LABEL, errorActionOf, type ErrorAction } from './errors'
 import { Plan } from './plan'
 import { HelperPill, Helpers, HelpersBack, useCardInSight } from './helpers'
 import { WakeLine } from './wake-line'
-import { ReactionBadge, ReactionPills, Tapback, useHoldToReact } from './reactions'
+import { ReactionBadge, ReactionPills, Tapback } from './reactions'
 
 type Of<K extends ChatItem['kind']> = Extract<ChatItem, { kind: K }>
 
@@ -527,10 +529,16 @@ const UserMessage = memo(function UserMessage({
   const { copied, copy } = useCopy()
   const [held, setHeld] = useState<HTMLElement | null>(null)
   const close = useCallback(() => setHeld(null), [])
-  const press = useLongPress(setHeld)
+  // What you typed, mentions included. The same string the hover Copy uses.
+  const copySource = useCallback(() => void copyMessage(item.text), [item.text])
+  const press = useLongPress(setHeld, {
+    ignoreControls: true,
+    // Edit has to stay one hold away. With nothing else to do, the hold copies.
+    onGesture: onEdit ? undefined : copySource,
+  })
   const actions: MenuAction[] = [
     ...(onEdit ? [{ label: 'Edit', icon: PencilLine, onSelect: () => onEdit(item) }] : []),
-    { label: 'Copy', icon: Copy, onSelect: () => void copy(item.text) },
+    { label: 'Copy', icon: Copy, onSelect: copySource },
   ]
 
   return (
@@ -668,7 +676,7 @@ const Turn = memo(function Turn({
   const texts = sections
     .flatMap((s) => s.blocks)
     .flatMap((b) => (b.kind === 'text' && b.item.text ? [b.item.text] : []))
-  const text = texts.map(proseOf).filter(Boolean).join('\n\n')
+  const text = clipboardText(texts)
   // Files the reply itself delivers aren't shown twice under the tool that made them.
   const delivered = new Set(texts.flatMap(mediaPathsOf))
   const tail = sections.at(-1)?.blocks.at(-1)
@@ -689,7 +697,6 @@ const Turn = memo(function Turn({
   const reactTo = onReact && reply?.text && (reply.rowId != null || last) ? reply : undefined
   const [tapAt, setTapAt] = useState<HTMLElement | null>(null)
   const closeTap = useCallback(() => setTapAt(null), [])
-  const hold = useHoldToReact(setTapAt)
   const mine = reactTo?.reactions?.find((r) => r.author === 'user')?.emoji
 
   return (
@@ -729,13 +736,12 @@ const Turn = memo(function Turn({
                 }
                 case 'text':
                   if (!block.item.text) return null
-                  return block.item === reactTo ? (
-                    // Touch: hold the reply to react, as you would a message in Messages.
-                    <div key={block.id} {...hold} className="[@media(pointer:coarse)]:[-webkit-touch-callout:none]">
+                  return (
+                    // Hold the words to copy them, once the reply has settled.
+                    // Streaming text, links and the tool cards around it are left alone.
+                    <CopyHold key={block.id} text={!live && text ? text : undefined}>
                       <RichText text={block.item.text} streaming={block.item.streaming} />
-                    </div>
-                  ) : (
-                    <RichText key={block.id} text={block.item.text} streaming={block.item.streaming} />
+                    </CopyHold>
                   )
                 case 'plan':
                   return <Plan key={block.id} item={block.item} live={live} />

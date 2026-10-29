@@ -832,6 +832,7 @@ export function Playground() {
   return (
     <>
       {scene === 'errors' ? <ErrorsGallery /> : <Chat key={scene} scene={scene} />}
+      {scene !== 'errors' && <Toaster position="top-center" toastOptions={{ className: 'murmur-toast' }} />}
       {!new URLSearchParams(location.search).has('bare') && (
         <div className="fixed top-[calc(env(safe-area-inset-top)+10px)] right-3 z-30 hidden sm:block">
           <Segmented value={scene} options={SCENES} onChange={pick} className="glass shadow-float" />

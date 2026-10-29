@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { HOLD_FALLBACK_MS, HOLD_MS, contextMenuAction, controlInside, holdMoved, pointerStartsHold } from './hold'
 
 // Press and hold a message (or right-click it) for what you can do with it.
 // The bubble lifts above a soft scrim and a small menu settles beside it, the
@@ -10,40 +11,93 @@ import { cn } from '@/lib/cn'
 
 export type MenuAction = { label: string; icon: LucideIcon; onSelect: () => void }
 
-const HOLD_MS = 420
-const SLOP = 8
+type LongPressOptions = {
+  /** A press that starts on a link, button or field inside is left alone. */
+  ignoreControls?: boolean
+  /**
+   * Run this on a touch long-press, inside the contextmenu event, instead of
+   * opening the menu. That event is still a user gesture, so iOS will allow
+   * the clipboard; a timer is not. If the event never comes, the hold still
+   * opens the menu so Copy is one tap away. A mouse right-click opens that menu
+   * too, unless some of the message is already selected.
+   */
+  onGesture?: (target: HTMLElement) => void
+}
 
 /** Long-press (touch or pen) and right-click open the menu; a scroll or a drag cancels. */
-export function useLongPress(onOpen: (target: HTMLElement) => void) {
+export function useLongPress(onOpen: (target: HTMLElement) => void, options?: LongPressOptions) {
   const timer = useRef<number | undefined>(undefined)
   const start = useRef<{ x: number; y: number } | null>(null)
+  const acted = useRef(false)
+  const fromTouch = useRef(false)
+  const moved = useRef(false)
+  const opts = useRef(options)
+  opts.current = options
   const cancel = () => {
     window.clearTimeout(timer.current)
     start.current = null
   }
   useEffect(() => cancel, [])
+
+  const act = () => {
+    if (acted.current) return false
+    acted.current = true
+    // Drop a selection the browser started, so its loupe doesn't sit on the menu.
+    window.getSelection()?.removeAllRanges()
+    navigator.vibrate?.(10)
+    return true
+  }
+
   return {
     onPointerDown: (e: PointerEvent<HTMLElement>) => {
-      if (e.pointerType === 'mouse') return
+      // A new gesture. A scroll in the previous one must not swallow this one.
+      moved.current = false
+      const onControl = !!opts.current?.ignoreControls && controlInside(e.target, e.currentTarget)
+      if (!pointerStartsHold(e.pointerType, onControl)) {
+        fromTouch.current = false
+        return
+      }
+      fromTouch.current = true
+      acted.current = false
       const target = e.currentTarget
       start.current = { x: e.clientX, y: e.clientY }
+      // The copy itself runs in contextmenu (a gesture). This only opens the
+      // menu if that event never arrives, and only while the finger is still down.
+      const ms = opts.current?.onGesture ? HOLD_FALLBACK_MS : HOLD_MS
       timer.current = window.setTimeout(() => {
         start.current = null
-        navigator.vibrate?.(10)
+        if (!act()) return
         onOpen(target)
-      }, HOLD_MS)
+      }, ms)
     },
     onPointerMove: (e: PointerEvent<HTMLElement>) => {
       const s = start.current
-      if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > SLOP) cancel()
+      if (!s || !holdMoved(e.clientX - s.x, e.clientY - s.y)) return
+      // A scroll or a drag. Remember it, so the context menu that may follow
+      // isn't treated as a hold.
+      moved.current = true
+      cancel()
     },
     onPointerUp: cancel,
     onPointerCancel: cancel,
     onPointerLeave: cancel,
     onContextMenu: (e: React.MouseEvent<HTMLElement>) => {
+      if (moved.current) return
+      const current = opts.current
+      const sel = window.getSelection()
+      const selected = !!sel && !sel.isCollapsed && !!sel.anchorNode && e.currentTarget.contains(sel.anchorNode)
+      const action = contextMenuAction({
+        copies: !!current?.onGesture,
+        fromTouch: fromTouch.current,
+        onControl: !!current?.ignoreControls && controlInside(e.target, e.currentTarget),
+        rightClickOnSelection: e.button === 2 && selected,
+      })
+      if (action === 'ignore') return
       e.preventDefault()
       cancel()
-      onOpen(e.currentTarget)
+      if (!act()) return
+      if (action === 'copy') current?.onGesture?.(e.currentTarget)
+      else onOpen(e.currentTarget)
     },
   }
 }
