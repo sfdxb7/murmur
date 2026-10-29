@@ -449,9 +449,10 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
 }
 
 /**
- * The next older page, up to 500 rows. No-op when that window is already
- * loaded or a page is already on its way. Resolves true when another page can
- * still be asked for, so a reader parked at the top keeps going.
+ * The next older page, up to 500 rows. A call made while a page is already on
+ * its way waits on that same read; it does not start another. Resolves true
+ * when another page can still be asked for, so the caller can keep going while
+ * the reader stays at the top.
  */
 export function loadOlder(id: string): Promise<boolean> {
   const pending = paging.get(id)

@@ -17,5 +17,5 @@
     "types": ["vite/client"],
     "paths": { "@/*": ["./src/*"], "@shared/*": ["./shared/*"] }
   },
-  "include": ["src", "shared"]
+  "include": ["src", "shared", "test/browser/harness.tsx"]
 }

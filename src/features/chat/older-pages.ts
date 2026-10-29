@@ -1,7 +1,8 @@
 // Older pages load when the reader reaches the top. Prepending a page does not
 // move `scrollTop` when it is already 0, so the scroll listener does not fire
-// again. This remembers that they parked there and asks for the next page when
-// the one in flight lands.
+// again. This remembers that they parked there. The thread keeps asking while
+// `isParked()` stays true; a layout that lands a page can also ask again, for
+// the case where that loop has already stopped.
 
 const TOP = 48
 /** Far enough from the top that the thread has actually been at the bottom (it opens there). */
@@ -29,6 +30,10 @@ export function olderPageFollow() {
       parked = false
       topId = undefined
       height = 0
+    },
+    /** True while the last scroll or layout still had them at the top. */
+    isParked() {
+      return parked
     },
     /** A scroll. True when this gesture reached the top and a page should be fetched. */
     onScroll(scrollTop: number) {

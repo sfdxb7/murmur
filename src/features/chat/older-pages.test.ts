@@ -13,6 +13,7 @@ describe('older pages while parked at the top', () => {
 
     // One gesture to the top.
     expect(follow.onScroll(0)).toBe(true)
+    expect(follow.isParked()).toBe(true)
 
     // The first older page lands (2 messages become 4). scrollTop never moved, so there is no scroll event.
     const first = follow.onLayout({ scrollTop: 0, scrollHeight: 1800, topId: 'page-1', atBottom: false })

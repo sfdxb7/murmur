@@ -198,8 +198,12 @@ type Props = Handlers &
     className?: string
     /** Which chat the files in it belong to, and how widgets talk back. */
     media?: MediaContext
-    /** The reader reached the top: bring in the next older page. */
-    onLoadOlder?: () => void
+    /**
+     * The reader reached the top. Resolves true when another older page can
+     * still be loaded. A call made while one page is in flight does not start
+     * the next one; the thread asks again only after this resolves.
+     */
+    onLoadOlder?: () => void | Promise<boolean | void>
   }
 
 const NO_MEDIA: MediaContext = {}
@@ -375,7 +379,10 @@ export function Thread({
   // Older pages are prepended. Stay at the top when that's where you are (so
   // the page just loaded is what you see); otherwise keep the same lines in view.
   // Prepending does not move scrollTop when it is already 0, so the scroll
-  // listener never hears about the next page. Ask again when the page lands.
+  // listener never hears about the next page. Keep asking while they stay parked.
+  // The ask has to wait until the page in flight resolves: the render that paints
+  // it runs before that read drops its in-flight guard, and a second call made
+  // then is the same read, not the next page.
   const follow = useRef(olderPageFollow())
   const followChat = useRef(chatKey)
   if (followChat.current !== chatKey) {
@@ -384,6 +391,8 @@ export function Thread({
   }
   const askMore = useRef(false)
   const firstId = items[0]?.id
+  // Writing scrollTop fires a scroll event. That echo is not the reader moving.
+  const echoing = useRef(false)
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -393,7 +402,11 @@ export function Thread({
       topId: firstId,
       atBottom: stick.isAtBottom,
     })
-    if (result.scrollTop !== el.scrollTop) el.scrollTop = result.scrollTop
+    if (result.scrollTop !== el.scrollTop) {
+      echoing.current = true
+      el.scrollTop = result.scrollTop
+      echoing.current = false
+    }
     askMore.current = result.ask
     // History that lands is already scrolled to its end when it first paints.
     // (Unless you've scrolled up to read: that stays where it is.)
@@ -408,20 +421,45 @@ export function Thread({
 
   const onLoadOlderRef = useRef(onLoadOlder)
   onLoadOlderRef.current = onLoadOlder
+  const pumping = useRef<Promise<void> | null>(null)
+  const pumpGeneration = useRef(0)
+  const pump = () => {
+    if (pumping.current) return
+    const generation = pumpGeneration.current
+    let run: Promise<void>
+    run = (async () => {
+      // One page at a time. The next wait sees whether they are still at the top
+      // after this one has landed and the scroll offset has been put back.
+      while (pumpGeneration.current === generation && follow.current.isParked()) {
+        const more = await onLoadOlderRef.current?.()
+        if (more !== true) break
+      }
+    })().finally(() => {
+      if (pumping.current === run) pumping.current = null
+    })
+    pumping.current = run
+  }
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    const generation = ++pumpGeneration.current
     const onScroll = () => {
-      if (follow.current.onScroll(el.scrollTop)) onLoadOlderRef.current?.()
+      if (echoing.current) return
+      if (follow.current.onScroll(el.scrollTop)) pump()
     }
     onScroll()
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    return () => {
+      if (pumpGeneration.current === generation) pumpGeneration.current++
+      // The loop in flight belongs to the chat this effect was watching.
+      pumping.current = null
+      el.removeEventListener('scroll', onScroll)
+    }
   }, [scrollRef, chatKey])
   useEffect(() => {
     if (!askMore.current) return
     askMore.current = false
-    onLoadOlderRef.current?.()
+    pump()
   }, [firstId, items.length])
 
   return (
