@@ -23,6 +23,7 @@ import { UserAttachments } from '@/features/media/attachments'
 import { ToolMedia } from '@/features/media/tool-media-view'
 import { MediaProvider, type MediaContext } from '@/features/media/context'
 import { mediaPathsOf, proseOf } from '@shared/message.ts'
+import { olderPageFollow } from './older-pages'
 import { ApprovalCard } from './approval-card'
 import { ClarifyCard } from './clarify-card'
 import { SecretCard } from './secret-card'
@@ -373,52 +374,55 @@ export function Thread({
 
   // Older pages are prepended. Stay at the top when that's where you are (so
   // the page just loaded is what you see); otherwise keep the same lines in view.
-  const topId = visible[0]?.id
-  const anchor = useRef<{ id?: string; top: number; height: number }>({ top: 0, height: 0 })
+  // Prepending does not move scrollTop when it is already 0, so the scroll
+  // listener never hears about the next page. Ask again when the page lands.
+  const follow = useRef(olderPageFollow())
+  const followChat = useRef(chatKey)
+  if (followChat.current !== chatKey) {
+    followChat.current = chatKey
+    follow.current.reset()
+  }
+  const askMore = useRef(false)
+  const firstId = items[0]?.id
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const prev = anchor.current
-    const prepended = prev.id !== undefined && topId !== undefined && prev.id !== topId
-    if (prepended && prev.height > 0 && !stick.isAtBottom) {
-      const delta = el.scrollHeight - prev.height
-      el.scrollTop = prev.top < 48 ? 0 : prev.top + Math.max(0, delta)
-    }
+    const result = follow.current.onLayout({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      topId: firstId,
+      atBottom: stick.isAtBottom,
+    })
+    if (result.scrollTop !== el.scrollTop) el.scrollTop = result.scrollTop
+    askMore.current = result.ask
     // History that lands is already scrolled to its end when it first paints.
     // (Unless you've scrolled up to read: that stays where it is.)
     if (landed.current) {
       landed.current = false
-      if (stick.isAtBottom) {
+      if (stick.isAtBottom && result.scrollTop >= 48) {
         settleUntil.current = performance.now() + SETTLE_MS
         el.scrollTop = el.scrollHeight
       }
     }
-    anchor.current = { id: topId, top: el.scrollTop, height: el.scrollHeight }
   })
 
-  // Scrolling up to the top asks for the next page. Once the thread has left
-  // the top (it opens at the bottom), staying there keeps the pages coming,
-  // so the top of the loaded window is reachable without another gesture.
   const onLoadOlderRef = useRef(onLoadOlder)
   onLoadOlderRef.current = onLoadOlder
-  const leftTheTop = useRef(false)
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    leftTheTop.current = false
     const onScroll = () => {
-      if (el.scrollTop > 64) leftTheTop.current = true
-      if (leftTheTop.current && el.scrollTop < 48) onLoadOlderRef.current?.()
+      if (follow.current.onScroll(el.scrollTop)) onLoadOlderRef.current?.()
     }
     onScroll()
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [scrollRef, chatKey])
   useEffect(() => {
-    const el = scrollRef.current
-    if (!el || !leftTheTop.current || el.scrollTop >= 48) return
+    if (!askMore.current) return
+    askMore.current = false
     onLoadOlderRef.current?.()
-  }, [topId, scrollRef])
+  }, [firstId, items.length])
 
   return (
     <MotionConfig reducedMotion="user">
