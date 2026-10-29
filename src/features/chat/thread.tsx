@@ -248,6 +248,23 @@ export function Thread({
   const watched = useRef(new Set<string>())
   for (const i of items) if (i.kind === 'approval' && i.status === 'pending') watched.current.add(i.id)
   const rows = useMemo(() => toRows(items, busy, watched.current), [items, busy])
+  // A long transcript paints its tail first. Markdown for every settled turn
+  // is what makes opening the chat hitch; the rest follows on the next frame.
+  const chatKey = media.sessionId ?? ''
+  const [forChat, setForChat] = useState(chatKey)
+  const [showAll, setShowAll] = useState(false)
+  let all = showAll && forChat === chatKey
+  if (chatKey !== forChat) {
+    setForChat(chatKey)
+    setShowAll(false)
+    all = false
+  }
+  const visible = all || rows.length <= 24 ? rows : rows.slice(-24)
+  useEffect(() => {
+    if (all || rows.length <= 24) return
+    const id = requestAnimationFrame(() => setShowAll(true))
+    return () => cancelAnimationFrame(id)
+  }, [all, rows.length, chatKey])
 
   // History appears without animation: whatever is there on first paint, and
   // any batch of several items landing at once (a transcript loading late).
@@ -282,7 +299,7 @@ export function Thread({
   const lastTurn = rows.findLast((r) => r.kind === 'turn')?.id
   // Who reads replies aloud: the agent in a one-to-one chat.
   const voice = media.profile ?? agent?.id
-  const editingAt = editingId ? rows.findIndex((r) => r.id === editingId) : -1
+  const editingAt = editingId ? visible.findIndex((r) => r.id === editingId) : -1
 
   // The composer floats over the end of the thread, outside the message log;
   // the log keeps room for it underneath.
@@ -378,9 +395,9 @@ export function Thread({
                     // Rows that leave (an edited message's old reply, an undo) fold away
                     // in place while the rest carries on.
                     <AnimatePresence initial={false} mode="popLayout">
-                      {rows.map((row, i) => {
+                      {visible.map((row, i) => {
                         // 24px between exchanges; a reply sits closer (16px) to what it answers.
-                        const gap = i === 0 ? '' : row.kind === 'turn' && rows[i - 1].kind === 'user' ? 'mt-4' : 'mt-6'
+                        const gap = i === 0 ? '' : row.kind === 'turn' && visible[i - 1].kind === 'user' ? 'mt-4' : 'mt-6'
                         // An edited message keeps its place (and its bubble).
                         const key = row.kind === 'user' ? (row.item.was ?? row.id) : row.id
                         let content: ReactNode

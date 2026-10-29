@@ -295,11 +295,16 @@ function rowsToItems(rows: Row[], speaker?: Speaker, errands: Map<string, Errand
   return items
 }
 
+/** How many saved rows a chat paints from before the rest of the page is asked for. */
+const FIRST_PAGE = 60
+/** Hermes's own page size, and as far back as a chat is shown. */
+const FULL_PAGE = 500
+
 /** A chat's saved rows, oldest first. */
-async function readRows(id: string, profile: string) {
+async function readRows(id: string, profile: string, limit = FULL_PAGE) {
   type Res = { messages?: Row[]; data?: Row[] }
   const res = await api.get<Res>(
-    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=500`,
+    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}`,
   )
   const rows = res.messages ?? res.data ?? []
   // "latest" pages from the end; put them back in reading order.
@@ -404,9 +409,28 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   const task = (async () => {
     try {
       if (!chat.ready) {
-        const items = await loadHistory(id, profile, speaker).catch(() => [] as ChatItem[])
+        // The latest page paints on its own. The rest of the history follows,
+        // so a long chat isn't blank until every row has arrived.
+        let rows: Row[] = []
+        try {
+          rows = await readRows(id, profile, FIRST_PAGE)
+        } catch {
+          rows = []
+        }
+        const first = rowsToItems(rows, speaker)
+        const firstIds = new Set(first.map((i) => i.id))
         // Anything sent while it loaded comes after the history.
-        patch(id, (c) => ({ items: [...items, ...c.items], ready: true }))
+        patch(id, (c) => ({ items: [...first, ...c.items], ready: true }))
+        if (rows.length >= FIRST_PAGE) {
+          const rest = await readRows(id, profile).catch(() => null)
+          if (rest) {
+            const all = rowsToItems(rest, speaker)
+            patch(id, (c) => {
+              const arrived = c.items.filter((i) => !firstIds.has(i.id))
+              return { items: [...all, ...arrived] }
+            })
+          }
+        }
       }
       await attach(id, true)
     } finally {

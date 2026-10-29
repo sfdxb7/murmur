@@ -8,8 +8,8 @@
 // Results are delivered "locally" (saved only), which is what makes them show
 // up here; Telegram is offered only when that agent has Telegram connected.
 
-import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useMemo, useRef } from 'react'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useRef } from 'react'
 import { create } from 'zustand'
 import { api, HermesError } from '@/hermes/rest'
 import { agentZone, ensureAgentTimezone } from '@/state/timezone'
@@ -377,6 +377,47 @@ export async function fetchRunResult(agentId: string, runId: string): Promise<Ru
 
 /** How many of a routine's newest runs are read for its latest result. */
 const LOOK_BACK = 12
+/** Message reads for the list, at once. More than this crowds out opening a chat. */
+const RESULT_READS = 3
+
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) await fn(items[next++])
+    }),
+  )
+}
+
+/**
+ * Each routine's newest runs, newest first, stopping at the first result worth
+ * showing. The runs after that can't change the line, so they aren't read.
+ */
+export async function scanRoutineResults(
+  runs: RoutineRun[],
+  load: (run: RoutineRun) => Promise<RunResult>,
+): Promise<Map<string, RunResult>> {
+  const byRoutine = new Map<string, RoutineRun[]>()
+  for (const run of runs) {
+    if (!run.routineId) continue
+    const list = byRoutine.get(run.routineId) ?? []
+    if (list.length < LOOK_BACK) byRoutine.set(run.routineId, [...list, run])
+  }
+  const found = new Map<string, RunResult>()
+  await pool([...byRoutine.values()], RESULT_READS, async (list) => {
+    for (const run of list) {
+      let result: RunResult
+      try {
+        result = await load(run)
+      } catch {
+        continue
+      }
+      found.set(run.id, result)
+      if (!result.replied && !result.quiet && result.text) return
+    }
+  })
+  return found
+}
 
 export type RoutineNews = {
   routine: Routine
@@ -398,6 +439,7 @@ export type RoutineNews = {
  */
 export function useRoutineNews(agentId: string | undefined) {
   const held = useRef<{ agentId?: string; data?: RoutineNews[] }>({})
+  const qc = useQueryClient()
   const routines = useRoutines(agentId)
   const runs = useRoutineRuns(agentId)
   const byRoutine = new Map<string, RoutineRun[]>()
@@ -406,17 +448,22 @@ export function useRoutineNews(agentId: string | undefined) {
     const list = byRoutine.get(run.routineId) ?? []
     if (list.length < LOOK_BACK) byRoutine.set(run.routineId, [...list, run])
   }
-  const read = [...byRoutine.values()].flat()
-  const results = useQueries({
-    queries: read.map((run) => ({
-      queryKey: runResultKey(agentId ?? '', run),
-      queryFn: () => fetchRunResult(agentId!, run.id),
-      staleTime: Infinity,
-      enabled: Boolean(agentId),
-    })),
+  const key = (runs.data ?? []).map((run) => `${run.id}@${run.lastAt}`).join('|')
+  const scan = useQuery({
+    queryKey: ['routine-headlines', agentId, key],
+    enabled: Boolean(agentId && runs.data && routines.data),
+    staleTime: Infinity,
+    queryFn: () =>
+      scanRoutineResults(runs.data!, (run) =>
+        qc.fetchQuery({
+          queryKey: runResultKey(agentId!, run),
+          queryFn: () => fetchRunResult(agentId!, run.id),
+          staleTime: Infinity,
+        }),
+      ),
   })
-  const resultOf = new Map(read.map((run, i) => [run.id, results[i]?.data]))
-  const loaded = results.every((r) => !r.isPending)
+  const resultOf = scan.data ?? new Map<string, RunResult>()
+  const loaded = scan.isSuccess
   // Opening a run reopens it in Hermes, so whether it's finished says little;
   // what it said does. One still going has said nothing yet, and one you've
   // replied in is a conversation now, among the chats.
@@ -449,20 +496,27 @@ export function useRoutineNews(agentId: string | undefined) {
 /** Runs you've replied in, which have become conversations. */
 export function useContinuedRuns(agentId: string | undefined) {
   const runs = useRoutineRuns(agentId)
+  const qc = useQueryClient()
   const open = (runs.data ?? []).filter((run) => !run.finished)
-  const results = useQueries({
-    queries: open.map((run) => ({
-      queryKey: runResultKey(agentId ?? '', run),
-      queryFn: () => fetchRunResult(agentId!, run.id),
-      staleTime: Infinity,
-      enabled: Boolean(agentId),
-    })),
+  const key = open.map((run) => `${run.id}@${run.lastAt}`).join('|')
+  const continued = useQuery({
+    queryKey: ['continued-runs', agentId, key],
+    enabled: Boolean(agentId && runs.data),
+    staleTime: Infinity,
+    queryFn: async () => {
+      const replied: RoutineRun[] = []
+      await pool(open, RESULT_READS, async (run) => {
+        const result = await qc.fetchQuery({
+          queryKey: runResultKey(agentId!, run),
+          queryFn: () => fetchRunResult(agentId!, run.id),
+          staleTime: Infinity,
+        })
+        if (result.replied) replied.push(run)
+      })
+      return replied
+    },
   })
-  const replied = open.filter((_, i) => results[i]?.data?.replied)
-  const key = replied.map((run) => `${run.id}@${run.lastAt}:${run.routineName}`).join('|')
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const data = useMemo(() => (runs.data ? replied : undefined), [Boolean(runs.data), key])
-  return { ...runs, data }
+  return { ...runs, data: runs.data ? (continued.data ?? []) : undefined }
 }
 
 /** How many routines an agent has switched on, for "Routines · 2 on". */
