@@ -51,6 +51,7 @@ import {
   getChat,
   editableMessage,
   leaveChat,
+  loadOlder,
   openChat,
   react,
   regenerate,
@@ -496,6 +497,7 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
             ) : undefined
           }
           media={media}
+          onLoadOlder={id ? () => void loadOlder(id) : undefined}
           // The header floats over the messages; they scroll up beneath it.
           className={
             goal

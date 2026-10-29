@@ -197,6 +197,8 @@ type Props = Handlers &
     className?: string
     /** Which chat the files in it belong to, and how widgets talk back. */
     media?: MediaContext
+    /** The reader reached the top: bring in the next older page. */
+    onLoadOlder?: () => void
   }
 
 const NO_MEDIA: MediaContext = {}
@@ -210,6 +212,7 @@ export function Thread({
   footer,
   className,
   media = NO_MEDIA,
+  onLoadOlder,
   editableId,
   editingId,
   onEdit,
@@ -368,23 +371,61 @@ export function Thread({
     return () => clearTimeout(wait)
   }, [pill, outIds.length, lastRow, reduced])
 
-  // History that lands is already scrolled to its end when it first paints.
+  // Older pages are prepended. Stay at the top when that's where you are (so
+  // the page just loaded is what you see); otherwise keep the same lines in view.
+  const topId = visible[0]?.id
+  const anchor = useRef<{ id?: string; top: number; height: number }>({ top: 0, height: 0 })
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (!landed.current || !el) return
-    landed.current = false
+    if (!el) return
+    const prev = anchor.current
+    const prepended = prev.id !== undefined && topId !== undefined && prev.id !== topId
+    if (prepended && prev.height > 0 && !stick.isAtBottom) {
+      const delta = el.scrollHeight - prev.height
+      el.scrollTop = prev.top < 48 ? 0 : prev.top + Math.max(0, delta)
+    }
+    // History that lands is already scrolled to its end when it first paints.
     // (Unless you've scrolled up to read: that stays where it is.)
-    if (!stick.isAtBottom) return
-    settleUntil.current = performance.now() + SETTLE_MS
-    el.scrollTop = el.scrollHeight
+    if (landed.current) {
+      landed.current = false
+      if (stick.isAtBottom) {
+        settleUntil.current = performance.now() + SETTLE_MS
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    anchor.current = { id: topId, top: el.scrollTop, height: el.scrollHeight }
   })
+
+  // Scrolling up to the top asks for the next page. Once the thread has left
+  // the top (it opens at the bottom), staying there keeps the pages coming,
+  // so the top of the loaded window is reachable without another gesture.
+  const onLoadOlderRef = useRef(onLoadOlder)
+  onLoadOlderRef.current = onLoadOlder
+  const leftTheTop = useRef(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    leftTheTop.current = false
+    const onScroll = () => {
+      if (el.scrollTop > 64) leftTheTop.current = true
+      if (leftTheTop.current && el.scrollTop < 48) onLoadOlderRef.current?.()
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [scrollRef, chatKey])
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !leftTheTop.current || el.scrollTop >= 48) return
+    onLoadOlderRef.current?.()
+  }, [topId, scrollRef])
 
   return (
     <MotionConfig reducedMotion="user">
       <MediaProvider value={media}>
         <MentionsProvider>
           <div className={cn('hue-scope relative h-full min-h-0', className)}>
-            <div ref={scrollRef} className="h-full overflow-y-auto overscroll-contain" role="log" aria-label="Messages">
+            <div ref={scrollRef} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]" role="log" aria-label="Messages">
               <div ref={contentRef} className="flex min-h-full flex-col">
                 {/* One reading column (~688px of text), shared with the composer below. */}
                 <div className="relative mx-auto flex w-full max-w-[736px] flex-1 flex-col px-4 pt-6 pb-12 sm:px-6">

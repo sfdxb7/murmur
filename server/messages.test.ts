@@ -88,4 +88,40 @@ describe('slimMessages', () => {
     expect(slimmed.messages[0].content).not.toContain('Umbrel Runtime Context')
     expect(slimmed.messages[0].content.length).toBeLessThan(content.length / 5)
   })
+
+  it('keeps an error marker the 2 KB head and tail would have dropped', () => {
+    // The same check the thread uses to mark a tool as failed.
+    const MARK = /"exit_code":\s*-1|BLOCKED:|"error":\s*"/
+    const headTail = (text: string) => `${text.slice(0, 1_400)}\n…\n${text.slice(-400)}`
+
+    const middle = `${'a'.repeat(5_000)}\nBLOCKED: disk full\n${'b'.repeat(5_000)}`
+    expect(middle.length).toBeGreaterThan(10_000)
+    expect(MARK.test(headTail(middle))).toBe(false)
+    const plain = JSON.parse(slimMessages(JSON.stringify({ messages: [{ id: 1, role: 'tool', content: middle }] }))!) as {
+      messages: { content: string }[]
+    }
+    expect(MARK.test(plain.messages[0].content)).toBe(true)
+    expect(plain.messages[0].content).toContain('BLOCKED: disk full')
+    expect(plain.messages[0].content.length).toBeLessThan(2_600)
+
+    const buried = `${'log '.repeat(2_000)}"error": "boom"${' tail'.repeat(2_000)}`
+    expect(MARK.test(headTail(buried))).toBe(false)
+    const asJson = JSON.stringify({ output: buried, exit_code: -1, host_image: '/opt/data/images/shot.png' })
+    const slimmed = JSON.parse(slimMessages(JSON.stringify({ messages: [{ id: 2, role: 'tool', content: asJson }] }))!) as {
+      messages: { content: string }[]
+    }
+    const tool = JSON.parse(slimmed.messages[0].content) as { output: string; exit_code: number; host_image: string }
+    expect(tool.exit_code).toBe(-1)
+    expect(tool.host_image).toBe('/opt/data/images/shot.png')
+    expect(tool.output).toContain('"error": "boom"')
+    expect(tool.output.length).toBeLessThan(buried.length / 4)
+    expect(MARK.test(slimmed.messages[0].content)).toBe(true)
+
+    const quiet = 'c'.repeat(10_000)
+    const quietSlim = JSON.parse(slimMessages(JSON.stringify({ messages: [{ id: 3, role: 'tool', content: quiet }] }))!) as {
+      messages: { content: string }[]
+    }
+    expect(MARK.test(quietSlim.messages[0].content)).toBe(false)
+    expect(quietSlim.messages[0].content.length).toBeLessThan(quiet.length / 4)
+  })
 })

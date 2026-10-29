@@ -24,12 +24,31 @@ const IMAGE_ATTACHED = /\[Image attached at: [^\]\n]+\]/g
 
 /** A tool result the thread never shows in full: labels, errors, image paths and mail subjects are short. */
 const TOOL_TEXT = 2_048
+/**
+ * What the thread treats as a failed tool (`rowsToItems`). Read on the full
+ * text, then kept if the head and tail would have dropped it.
+ */
+const toolMark = (text: string) => /"exit_code":\s*-1|BLOCKED:|"error":\s*"/.exec(text)
 
 function capText(text: string) {
   if (text.length <= TOOL_TEXT) return text
   const head = 1_400
   const tail = 400
-  return `${text.slice(0, head)}\n…\n${text.slice(-tail)}`
+  let out = `${text.slice(0, head)}\n…\n${text.slice(-tail)}`
+  const mark = toolMark(text)
+  // A failure in the middle of a long log is the part the thread is looking for.
+  if (mark && !toolMark(out)) {
+    let start = text.lastIndexOf('\n', mark.index - 1) + 1
+    let end = text.indexOf('\n', mark.index)
+    if (end < 0) end = text.length
+    if (end - start > 500) {
+      start = Math.max(start, mark.index - 200)
+      end = Math.min(text.length, start + 500)
+    }
+    const line = text.slice(start, end)
+    if (toolMark(line)) out = `${out}\n${line}`
+  }
+  return out
 }
 
 /** Keep attachment markers that lived only inside a block that is about to be dropped. */

@@ -217,33 +217,50 @@ function newestChat(p: Profile): Agent['lastChat'] {
 const quietRun = (s: LastSession) =>
   !!s.run && (!s.preview || s.preview.startsWith('[IMPORTANT:') || isRunBrief(s.preview) || isQuietExcerpt(s.preview))
 
+/** How long the roster's own calls get before each agent's routine preview starts. */
+export const ROSTER_PREVIEW_DELAY = 800
+
+/** Lets the home screen's first requests go out before per-agent routine previews. */
+export function afterRosterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(() => resolve(), { timeout: 3000 })
+      else resolve()
+    }, ROSTER_PREVIEW_DELAY)
+  })
+}
+
 /**
  * Whether Hermes's newest chat is one of a routine's runs (asked once per
  * chat). A run with nothing to say gives way to the newest chat that did say
  * something: a conversation, or a run with a result. Each run is read once.
+ * One agent at a time: these previews used to leave with every profile at
+ * once and sat on top of the home screen's own calls.
  */
 export async function placeLastChats<P extends Profile>(profiles: P[]): Promise<P[]> {
-  return Promise.all(
-    profiles.map(async (p) => {
-      if (!p.last_session?.id) return p
-      const last = { ...p.last_session, run: Boolean(await runOf(p.name, p.last_session.id).catch(() => null)) }
-      if (!quietRun(last)) return { ...p, last_session: last }
-      try {
-        const res = await api.get<{ sessions?: LastSession[] }>(
-          `/api/sessions?profile=${encodeURIComponent(p.name)}&limit=8&order=recent&min_messages=1`,
-        )
-        for (const row of res.sessions ?? []) {
-          // Only Hermes's scheduler makes chats from "cron".
-          if (row.source !== 'cron') return { ...p, last_session: row }
-          const said = await runSaid(p.name, row)
-          if (said) return { ...p, last_session: { ...row, run: true, preview: said } }
-        }
-        return { ...p, last_session: null }
-      } catch {
-        return { ...p, last_session: last }
-      }
-    }),
-  )
+  const out: P[] = []
+  for (const p of profiles) out.push(await placeOne(p))
+  return out
+}
+
+async function placeOne<P extends Profile>(p: P): Promise<P> {
+  if (!p.last_session?.id) return p
+  const last = { ...p.last_session, run: Boolean(await runOf(p.name, p.last_session.id).catch(() => null)) }
+  if (!quietRun(last)) return { ...p, last_session: last }
+  try {
+    const res = await api.get<{ sessions?: LastSession[] }>(
+      `/api/sessions?profile=${encodeURIComponent(p.name)}&limit=8&order=recent&min_messages=1`,
+    )
+    for (const row of res.sessions ?? []) {
+      // Only Hermes's scheduler makes chats from "cron".
+      if (row.source !== 'cron') return { ...p, last_session: row }
+      const said = await runSaid(p.name, row)
+      if (said) return { ...p, last_session: { ...row, run: true, preview: said } }
+    }
+    return { ...p, last_session: null }
+  } catch {
+    return { ...p, last_session: last }
+  }
 }
 
 const runWords = new Map<string, Promise<string>>()
@@ -306,8 +323,9 @@ function agentsFrom(profiles: Profile[]): Agent[] {
 
 /**
  * The roster paints from `profiles.list`. Classifying a quiet routine run
- * (`placeLastChats`) asks Hermes again per agent and sometimes reads messages;
- * that fills in afterwards instead of holding the splash.
+ * (`placeLastChats`) asks Hermes again per agent and sometimes reads messages.
+ * That starts after the roster's own calls, one agent at a time, instead of
+ * holding the splash or crowding the first paint.
  */
 export function useAgents() {
   const base = useQuery({
@@ -326,7 +344,10 @@ export function useAgents() {
   const placed = useQuery({
     queryKey: [...agentsKey, 'placed', sig],
     enabled: Boolean(base.data),
-    queryFn: () => placeLastChats(base.data!),
+    queryFn: async () => {
+      await afterRosterPaint()
+      return placeLastChats(base.data!)
+    },
     staleTime: 30_000,
   })
   const data = useMemo(

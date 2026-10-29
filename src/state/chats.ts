@@ -295,21 +295,39 @@ function rowsToItems(rows: Row[], speaker?: Speaker, errands: Map<string, Errand
   return items
 }
 
-/** How many saved rows a chat paints from before the rest of the page is asked for. */
+/** How many saved rows a chat paints from. Older rows load on scroll, up to FULL_PAGE. */
 const FIRST_PAGE = 60
-/** Hermes's own page size, and as far back as a chat is shown. */
+/** As far back as a chat is shown: the same window a single page of 500 used to cover. */
 const FULL_PAGE = 500
 
-/** A chat's saved rows, oldest first. */
-async function readRows(id: string, profile: string, limit = FULL_PAGE) {
+/** Rows already shown, oldest first, and whether the window above them is empty. */
+const loadedRows = new Map<string, { rows: Row[]; done: boolean }>()
+/** Ids that came from those rows, so a later page can replace them without dropping a live send. */
+const historyIds = new Map<string, Set<string>>()
+const paging = new Map<string, Promise<boolean>>()
+
+/** A chat's saved rows, oldest first. `offset` skips that many newest rows (`order=latest`). */
+async function readRows(id: string, profile: string, limit = FULL_PAGE, offset = 0) {
   type Res = { messages?: Row[]; data?: Row[] }
   const res = await api.get<Res>(
-    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}`,
+    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`,
   )
   const rows = res.messages ?? res.data ?? []
   // "latest" pages from the end; put them back in reading order.
   if (rows.length > 1 && (rows[0].id ?? 0) > (rows.at(-1)!.id ?? 0)) rows.reverse()
   return rows
+}
+
+/** Replace the saved part of the chat with `rows` and keep anything that arrived live. */
+function showHistory(id: string, rows: Row[], speaker?: Speaker, ready?: boolean) {
+  const history = rowsToItems(rows, speaker)
+  const ids = new Set(history.map((item) => item.id))
+  const prev = historyIds.get(id)
+  historyIds.set(id, ids)
+  patch(id, (c) => {
+    const live = c.items.filter((item) => !ids.has(item.id) && !prev?.has(item.id))
+    return { items: [...history, ...live], ...(ready ? { ready: true } : {}) }
+  })
 }
 
 async function loadHistory(id: string, profile: string, speaker?: Speaker) {
@@ -409,28 +427,17 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   const task = (async () => {
     try {
       if (!chat.ready) {
-        // The latest page paints on its own. The rest of the history follows,
-        // so a long chat isn't blank until every row has arrived.
+        // The newest page paints on its own. Older pages wait until the reader
+        // scrolls up, so opening a long chat does not pull the whole window.
         let rows: Row[] = []
         try {
           rows = await readRows(id, profile, FIRST_PAGE)
         } catch {
           rows = []
         }
-        const first = rowsToItems(rows, speaker)
-        const firstIds = new Set(first.map((i) => i.id))
+        loadedRows.set(id, { rows, done: rows.length < FIRST_PAGE })
         // Anything sent while it loaded comes after the history.
-        patch(id, (c) => ({ items: [...first, ...c.items], ready: true }))
-        if (rows.length >= FIRST_PAGE) {
-          const rest = await readRows(id, profile).catch(() => null)
-          if (rest) {
-            const all = rowsToItems(rest, speaker)
-            patch(id, (c) => {
-              const arrived = c.items.filter((i) => !firstIds.has(i.id))
-              return { items: [...all, ...arrived] }
-            })
-          }
-        }
+        showHistory(id, rows, speaker, true)
       }
       await attach(id, true)
     } finally {
@@ -439,6 +446,50 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   })()
   opening.set(id, task)
   return task
+}
+
+/**
+ * The next older page, up to 500 rows. No-op when that window is already
+ * loaded or a page is already on its way. Resolves true when another page can
+ * still be asked for, so a reader parked at the top keeps going.
+ */
+export function loadOlder(id: string): Promise<boolean> {
+  const pending = paging.get(id)
+  if (pending) return pending
+  const task = readOlder(id).finally(() => {
+    if (paging.get(id) === task) paging.delete(id)
+  })
+  paging.set(id, task)
+  return task
+}
+
+async function readOlder(id: string): Promise<boolean> {
+  const chat = getChat(id)
+  const state = loadedRows.get(id)
+  if (!chat?.ready || !state || state.done) return false
+  const room = FULL_PAGE - state.rows.length
+  if (room <= 0) {
+    state.done = true
+    return false
+  }
+  const limit = Math.min(FIRST_PAGE, room)
+  let page: Row[]
+  try {
+    page = await readRows(id, chat.profile, limit, state.rows.length)
+  } catch {
+    return false
+  }
+  const have = new Set(state.rows.flatMap((row) => (row.id == null ? [] : [row.id])))
+  const fresh = page.filter((row) => row.id == null || !have.has(row.id))
+  if (!fresh.length) {
+    state.done = true
+    return false
+  }
+  // `order=latest` with an offset is the next older slice. It belongs above what is on screen.
+  state.rows = [...fresh, ...state.rows]
+  state.done = fresh.length < limit || state.rows.length >= FULL_PAGE
+  showHistory(id, state.rows, chat.speaker)
+  return !state.done
 }
 
 /** The chat is off screen. Hermes lets it go once nothing holds it (see the reconnect below). */
