@@ -586,9 +586,15 @@ async function settleStale(id: string, since: number) {
   if (!chat || (asked.get(id) ?? 0) >= since || chat.status === 'waiting') return
   const tail = flowTail(chat.items).item
   const cut = tail?.kind === 'assistant' && tail.streaming ? tail.id : undefined
-  const stuck = cut || chat.items.some((i) => i.kind === 'tool' && i.status === 'running')
+  // The connection dropped before this page saw the reply begin (or while a
+  // step ran), and the replay couldn't bring it: the turn is over, so take
+  // its saved steps and reply.
+  const start = chat.items.findLastIndex(startsTurn)
+  const unanswered = start >= 0 && !chat.items.slice(start + 1).some((i) => i.kind === 'assistant')
+  const stuck = cut || unanswered || chat.items.some((i) => i.kind === 'tool' && i.status === 'running')
   if (!stuck) return
   patch(id, (c) => ({ items: settle(c.items), status: 'idle' }))
+  if (unanswered && !cut) return takeSavedTurn(id, chat.items[start].id)
   if (!cut) return
   const history = await loadHistory(id, chat.profile, chat.speaker).catch(() => [] as ChatItem[])
   const final = history.findLast((i) => i.kind === 'assistant')
@@ -596,6 +602,35 @@ async function settleStale(id: string, since: number) {
   patch(id, (c) => ({
     items: c.items.map((i) => (i.id === cut && i.kind === 'assistant' ? { ...i, text: final.text } : i)),
   }))
+}
+
+/**
+ * Replace what this page has of its last turn (from `startId` on) with the
+ * turn as Hermes saved it: its steps and its reply. Asides stay.
+ */
+async function takeSavedTurn(id: string, startId: string) {
+  const chat = getChat(id)
+  if (!chat) return
+  const begun = chat.items.find((i) => i.id === startId)
+  let row = begun && rowOf(begun)
+  let rows: Row[] = []
+  let at = -1
+  // Most turns fit in the newest page; a long run of steps needs the full window.
+  for (const limit of [FIRST_PAGE, FULL_PAGE]) {
+    rows = await readRows(id, chat.profile, limit).catch(() => [] as Row[])
+    row ??= rows.findLast((r) => r.role === 'user')?.id
+    at = rows.findIndex((r) => r.id === row)
+    if (at >= 0 || rows.length < limit) break
+  }
+  if (at < 0) return
+  const saved = rowsToItems(rows.slice(at + 1), chat.speaker, errandsOf(rows))
+  if (!saved.some((i) => i.kind === 'assistant')) return
+  patch(id, (c) => {
+    const start = c.items.findIndex((i) => i.id === startId)
+    if (start < 0 || c.items.slice(start + 1).some((i) => i.kind === 'assistant')) return
+    const after = c.items.slice(start + 1)
+    return { items: [...c.items.slice(0, start + 1), ...saved, ...after.filter(isSide)] }
+  })
 }
 
 // ── Per-chat model choices ──────────────────────────────────────────────────

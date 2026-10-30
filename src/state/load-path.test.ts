@@ -22,9 +22,17 @@ g.sessionStorage = memoryStorage
 
 const rpc = vi.fn()
 const get = vi.fn()
+const stateListeners: ((state: string) => void)[] = []
 vi.mock('@/hermes/gateway', () => ({
   rpc: (...args: unknown[]) => rpc(...args),
-  gateway: { onEvent: () => () => {}, onRequest: () => () => {}, onState: () => () => {} },
+  gateway: {
+    onEvent: () => () => {},
+    onRequest: () => () => {},
+    onState: (fn: (state: string) => void) => {
+      stateListeners.push(fn)
+      return () => {}
+    },
+  },
 }))
 vi.mock('@/hermes/rest', () => ({
   api: { get: (...args: unknown[]) => get(...args) },
@@ -39,7 +47,7 @@ vi.mock('@/hermes/rest', () => ({
 
 const { afterRosterPaint, fetchAgentChats, placeLastChats, ROSTER_PREVIEW_DELAY } = await import('./agents')
 const { scanRoutineResults } = await import('./routines')
-const { loadOlder, openChat, useChats } = await import('./chats')
+const { loadOlder, openChat, send, useChats, wireChats } = await import('./chats')
 
 const run = (id: string, routineId: string, at: number): RoutineRun => ({
   id,
@@ -263,5 +271,45 @@ describe('openChat', () => {
     await loadOlder('chat-tool')
     const tool = useChats.getState().chats['chat-tool'].items.find((item) => item.kind === 'tool')
     expect(tool).toMatchObject({ status: 'done', name: 'terminal' })
+  })
+})
+
+describe('a reply that finished while the connection was down', () => {
+  it('shows once the socket is back, without a reload', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] })
+    // The reconnect waits on the page's own timer.
+    vi.stubGlobal('window', globalThis)
+    try {
+      wireChats()
+      let rows = history(4)
+      get.mockImplementation(async (path: string) => ({ messages: pageOf(rows, path).messages }))
+      rpc.mockImplementation(async (method: string) => {
+        if (method === 'session.resume') return { session_id: 'runtime-2', running: false, status: 'idle' }
+        if (method === 'prompt.submit') return { user_row_id: 5 }
+        return {}
+      })
+      await openChat('chat-2', 'default')
+      await send('chat-2', 'Reply with the single word: pong')
+      // The socket drops before any of the turn's events arrive, the run
+      // finishes and is saved, and the replay can't bring it back.
+      rows = [...rows, { id: 5, role: 'user', content: 'Reply with the single word: pong', timestamp: 5 }, { id: 6, role: 'assistant', content: 'pong', timestamp: 6 }]
+      await vi.advanceTimersByTimeAsync(5000)
+      for (const fn of stateListeners) fn('open')
+      await vi.advanceTimersByTimeAsync(2000)
+      const chat = useChats.getState().chats['chat-2']
+      expect(chat.status).toBe('idle')
+      const items = chat.items.filter((i) => i.kind === 'user' || i.kind === 'assistant')
+      expect(items.map((i) => ('text' in i ? i.text : ''))).toEqual([
+        'message 1',
+        'message 2',
+        'message 3',
+        'message 4',
+        'Reply with the single word: pong',
+        'pong',
+      ])
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
   })
 })
