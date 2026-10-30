@@ -8,6 +8,7 @@
   "scripts": {
     "dev:web": "vite",
     "dev:server": "node --watch server/index.ts",
+    "test:selection": "playwright test -c playwright.selection.config.ts",
     "build": "tsc -b && vite build",
     "start": "node server/index.ts",
     "typecheck": "tsc -b",

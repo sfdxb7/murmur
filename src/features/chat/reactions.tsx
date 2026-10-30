@@ -7,7 +7,7 @@ import type { Reaction } from './types'
 
 // Tapbacks, the way Messages does them: tap the smiley under a reply and pick
 // one of six. Yours sit under the agent's reply; the agent's sit on the corner
-// of your bubble. Holding the reply copies it.
+// of your bubble. Holding the reply selects its words.
 
 export const TAPBACKS = ['❤️', '👍', '👎', '😂', '‼️', '❓']
 

@@ -28,10 +28,9 @@ import { ClarifyCard } from './clarify-card'
 import { SecretCard } from './secret-card'
 import { MessageActions } from './message-actions'
 import { MentionText, MentionsProvider } from './mention'
-import { MessageMenu, useLongPress, type MenuAction } from './message-menu'
+import { MessageMenu, type MenuAction } from './message-menu'
 import { useCopy } from './use-copy'
 import { clipboardText, copyMessage } from './copy-message'
-import { CopyHold } from './copy-hold'
 import { AsideCard, CommandCard } from './side-cards'
 import { ERROR_ACTION_LABEL, errorActionOf, type ErrorAction } from './errors'
 import { Plan } from './plan'
@@ -511,6 +510,12 @@ const BUBBLE = 'rounded-[20px] rounded-br-md bg-user-bubble px-4 py-2.5 text-bod
 const quiet =
   'pressable relative inline-flex size-8 items-center justify-center rounded-full text-ink-3 hover:bg-fill-1 hover:text-ink-2 after:absolute after:-inset-1.5'
 
+/** Some of this element's words are selected. */
+function selectionIn(el: HTMLElement) {
+  const sel = window.getSelection()
+  return !!sel && !sel.isCollapsed && !!sel.anchorNode && el.contains(sel.anchorNode)
+}
+
 const UserMessage = memo(function UserMessage({
   item,
   isNew,
@@ -531,11 +536,23 @@ const UserMessage = memo(function UserMessage({
   const close = useCallback(() => setHeld(null), [])
   // What you typed, mentions included. The same string the hover Copy uses.
   const copySource = useCallback(() => void copyMessage(item.text), [item.text])
-  const press = useLongPress(setHeld, {
-    ignoreControls: true,
-    // Edit has to stay one hold away. With nothing else to do, the hold copies.
-    onGesture: onEdit ? undefined : copySource,
-  })
+  // Holding the words selects them, with the system's own handles and Copy.
+  // The menu is a right-click away with a mouse, and a tap away on a phone
+  // for the message you can edit. Neither takes over words already selected.
+  const pointer = useRef('mouse')
+  const press = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => void (pointer.current = e.pointerType),
+    onContextMenu: (e: React.MouseEvent<HTMLElement>) => {
+      if (pointer.current !== 'mouse' || selectionIn(e.currentTarget)) return
+      e.preventDefault()
+      setHeld(e.currentTarget)
+    },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      if (pointer.current === 'mouse' || !onEdit || selectionIn(e.currentTarget)) return
+      if ((e.target as HTMLElement).closest?.('a, button')) return
+      setHeld(e.currentTarget)
+    },
+  }
   const actions: MenuAction[] = [
     ...(onEdit ? [{ label: 'Edit', icon: PencilLine, onSelect: () => onEdit(item) }] : []),
     { label: 'Copy', icon: Copy, onSelect: copySource },
@@ -571,7 +588,7 @@ const UserMessage = memo(function UserMessage({
               {...press}
               className={cn(
                 BUBBLE,
-                'ring-offset-bg transition-[opacity,box-shadow] duration-300 ease-(--ease-out) [-webkit-touch-callout:none] [@media(pointer:coarse)]:select-none',
+                'ring-offset-bg transition-[opacity,box-shadow] duration-300 ease-(--ease-out)',
                 editing && 'ring-2 ring-accent ring-offset-2',
                 held && 'opacity-0',
               )}
@@ -736,13 +753,8 @@ const Turn = memo(function Turn({
                 }
                 case 'text':
                   if (!block.item.text) return null
-                  return (
-                    // Hold the words to copy them, once the reply has settled.
-                    // Streaming text, links and the tool cards around it are left alone.
-                    <CopyHold key={block.id} text={!live && text ? text : undefined}>
-                      <RichText text={block.item.text} streaming={block.item.streaming} />
-                    </CopyHold>
-                  )
+                  // Hold (or drag across) the words to select them, as on any page.
+                  return <RichText key={block.id} text={block.item.text} streaming={block.item.streaming} />
                 case 'plan':
                   return <Plan key={block.id} item={block.item} live={live} />
                 case 'helpers':
