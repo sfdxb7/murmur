@@ -393,9 +393,17 @@ export function Thread({
   const firstId = items[0]?.id
   // Writing scrollTop fires a scroll event. That echo is not the reader moving.
   const echoing = useRef(false)
+  const shownTop = useRef<string | undefined>(undefined)
+  const shownAll = useRef(all)
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // An older page went in above. (A chat's first history has nothing above it yet.)
+    const prepended = shownTop.current !== undefined && firstId !== shownTop.current
+    shownTop.current = firstId
+    // The rest of a long transcript just went in above its tail.
+    const expanded = all && !shownAll.current
+    shownAll.current = all
     const result = follow.current.onLayout({
       scrollTop: el.scrollTop,
       scrollHeight: el.scrollHeight,
@@ -409,15 +417,31 @@ export function Thread({
     }
     askMore.current = result.ask
     // History that lands is already scrolled to its end when it first paints.
-    // (Unless you've scrolled up to read: that stays where it is.)
-    if (landed.current) {
+    // (Unless you've scrolled up to read, or it's an older page: that stays where it is.)
+    // A chat that has just opened is at scrollTop 0, which is not "at the top to read".
+    // The rest of the transcript painting in above the tail is the same landing.
+    if (landed.current || expanded) {
       landed.current = false
-      if (stick.isAtBottom && result.scrollTop >= 48) {
+      if (stick.isAtBottom && !prepended) {
         settleUntil.current = performance.now() + SETTLE_MS
         el.scrollTop = el.scrollHeight
       }
     }
   })
+
+  // While a chat settles, growth (markdown filling in, the rest of the
+  // transcript) is pinned before it paints. The stick-to-bottom scroll waits
+  // for the next frame, so on its own each growth shows for a frame first.
+  useEffect(() => {
+    const el = scrollRef.current
+    const box = el?.firstElementChild
+    if (!el || !box) return
+    const ro = new ResizeObserver(() => {
+      if (performance.now() < settleUntil.current && stick.isAtBottom) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [scrollRef, stick, chatKey])
 
   const onLoadOlderRef = useRef(onLoadOlder)
   onLoadOlderRef.current = onLoadOlder

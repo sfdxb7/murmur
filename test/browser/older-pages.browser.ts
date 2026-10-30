@@ -159,3 +159,31 @@ test('a page that lands mid-thread leaves the reader where they were', async ({ 
   await page.waitForTimeout(LATENCY_MS + 500)
   expect(hits.filter((hit) => hit.offset > 0).map((hit) => hit.offset)).toEqual([60])
 })
+
+test('a chat opens already at the bottom and does not move after its first paint', async ({ page }) => {
+  // Every frame from the first one with messages in it: how far the newest line is from the bottom.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __frames: { gap: number; top: number }[] }
+    w.__frames = []
+    // Read just after each frame is painted (a task queued from the frame runs after paint).
+    const read = () => {
+      const el = document.querySelector('[role=log]')
+      const line = [...(el?.querySelectorAll('p') ?? [])].findLast((p) => /message 600\b/.test(p.textContent ?? ''))
+      if (el && line && el.scrollHeight > el.clientHeight + 200)
+        w.__frames.push({ gap: Math.round(el.scrollHeight - el.clientHeight - el.scrollTop), top: Math.round(line.getBoundingClientRect().top) })
+    }
+    const tick = () => {
+      setTimeout(read, 0)
+      if (w.__frames.length < 90) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+  await installHermes(page, [])
+  await page.goto('/test/browser/harness.html')
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __frames: unknown[] }).__frames.length), { timeout: 10_000 }).toBeGreaterThanOrEqual(90)
+  const frames = await page.evaluate(() => (window as unknown as { __frames: { gap: number; top: number }[] }).__frames)
+  // The bug: the first frame sat a screen or more above the end, then the thread slid down to it.
+  expect(frames.map((f) => f.gap).filter((gap) => gap > 4)).toEqual([])
+  // (The newest turn's own markdown filling in can nudge its first line by a few pixels.)
+  expect(Math.max(...frames.map((f) => f.top)) - Math.min(...frames.map((f) => f.top))).toBeLessThan(12)
+})
