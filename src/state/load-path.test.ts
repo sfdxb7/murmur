@@ -47,7 +47,7 @@ vi.mock('@/hermes/rest', () => ({
 
 const { afterRosterPaint, fetchAgentChats, placeLastChats, ROSTER_PREVIEW_DELAY } = await import('./agents')
 const { scanRoutineResults } = await import('./routines')
-const { loadOlder, openChat, send, useChats, wireChats } = await import('./chats')
+const { loadOlder, openChat, regenerate, retry, send, useChats, wireChats } = await import('./chats')
 
 const run = (id: string, routineId: string, at: number): RoutineRun => ({
   id,
@@ -309,6 +309,65 @@ describe('a reply that finished while the connection was down', () => {
       ])
     } finally {
       vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('Try again after a send failed', () => {
+  const finish = (id: string) =>
+    useChats.setState((s) => ({ chats: { ...s.chats, [id]: { ...s.chats[id], status: 'idle' } } }))
+
+  it('remembers the saved message, so the next Try again replaces the reply instead of asking twice', async () => {
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+    let submits = 0
+    rpc.mockImplementation(async (method: string) => {
+      if (method === 'session.resume') return { session_id: 'runtime-r' }
+      if (method === 'prompt.submit' && ++submits === 1) throw new Error('socket closed')
+      if (method === 'prompt.submit') return { user_row_id: 3 }
+      return {}
+    })
+    await openChat('chat-r', 'default')
+    await send('chat-r', 'hello')
+    expect(useChats.getState().chats['chat-r'].items.at(-1)).toMatchObject({ kind: 'error', retryable: true })
+    await retry('chat-r')
+    finish('chat-r')
+    await regenerate('chat-r')
+    const submitted = rpc.mock.calls.filter(([method]) => method === 'prompt.submit').map(([, params]) => params)
+    expect(submitted).toHaveLength(3)
+    expect(submitted[2]).toMatchObject({ text: 'hello', truncate_before_row_id: 3 })
+  })
+
+  it('sends the files again when they never got there', async () => {
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = ''
+        onload: (() => void) | null = null
+        readAsDataURL() {
+          this.result = 'data:text/plain;base64,aGk='
+          queueMicrotask(() => this.onload?.())
+        }
+      },
+    )
+    try {
+      get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+      let attaches = 0
+      rpc.mockImplementation(async (method: string) => {
+        if (method === 'session.resume') return { session_id: 'runtime-f' }
+        if (method === 'file.attach' && ++attaches === 1) throw new Error('upload failed')
+        if (method === 'file.attach') return { ref_text: '@file:notes.txt' }
+        if (method === 'prompt.submit') return { user_row_id: 3 }
+        return {}
+      })
+      await openChat('chat-f', 'default')
+      await send('chat-f', 'read this', [new File(['hi'], 'notes.txt', { type: 'text/plain' })])
+      await retry('chat-f')
+      const submitted = rpc.mock.calls.filter(([method]) => method === 'prompt.submit').map(([, params]) => params)
+      expect(attaches).toBe(2)
+      expect(submitted).toEqual([expect.objectContaining({ text: '@file:notes.txt\n\nread this' })])
+      expect(useChats.getState().chats['chat-f'].items.some((item) => item.kind === 'error')).toBe(false)
+    } finally {
       vi.unstubAllGlobals()
     }
   })

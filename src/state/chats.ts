@@ -775,6 +775,9 @@ const isImage = (f: File) => /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.type)
 /** The full prompt each message went out with (refs included), for Try again. */
 const prompts = new Map<string, string>()
 
+/** Files of a message that never reached Hermes, so trying again sends them too. */
+const unsent = new Map<string, { text: string; files: File[] }>()
+
 /** Pictures you sent, shown from memory until their chat goes away. */
 const pictures = new Map<string, string[]>()
 
@@ -817,42 +820,51 @@ export async function send(id: string, text: string, files: File[] = [], opts: S
   }
   asked.set(id, Date.now())
   patch(id, (c) => ({ items: [...c.items, item], status: busy ? c.status : 'thinking' }))
+  if (files.length) unsent.set(itemId, { text, files })
 
   try {
-    const refs: string[] = []
-    for (const file of files) {
-      const data = await readDataUrl(file)
-      if (isImage(file)) {
-        const res = await onChat<{ path?: string }>(id, 'image.attach_bytes', {
-          content_base64: data.split(',')[1] ?? '',
-          filename: file.name || 'image.png',
-        })
-        if (res.path && file.name) rememberUpload(res.path, file.name)
-      } else {
-        // (PDFs too: pdf.attach needs poppler, which Hermes may not have.)
-        const res = await onChat<{ ref_text?: string }>(id, 'file.attach', {
-          name: file.name || 'file',
-          data_url: data.startsWith('data:;') ? data.replace('data:;', 'data:application/octet-stream;') : data,
-        })
-        if (res.ref_text) refs.push(res.ref_text)
-      }
-    }
-    const prompt = [refs.join('\n'), text].filter(Boolean).join('\n\n') || 'What do you see in this image?'
-    prompts.set(itemId, prompt)
-    // While it's working, a new message steers the current reply instead of
-    // waiting its turn — the way you'd interrupt a person mid-thought. (Before
-    // the agent is up it can't be steered yet; then it waits its turn.)
-    const steered =
-      busy && !files.length && (await onChat(id, 'session.steer', { text: prompt }).then(() => true, () => false))
-    if (!steered) {
-      const res = await onChat<SubmitResult>(id, 'prompt.submit', { text: prompt, profile: chat.profile })
-      if (res.user_row_id != null) setRowId(id, itemId, res.user_row_id)
-    }
+    await deliver(id, itemId, text, files, busy)
+    unsent.delete(itemId)
   } catch (e) {
     patch(id, (c) => ({
       status: 'error',
       items: [...c.items, { kind: 'error', id: uid('e'), message: attachError(e), retryable: true }],
     }))
+  }
+}
+
+/** Upload a message's files, then hand Hermes the prompt (steering a reply that's under way). */
+async function deliver(id: string, itemId: string, text: string, files: File[], busy: boolean) {
+  const chat = getChat(id)
+  if (!chat) return
+  const refs: string[] = []
+  for (const file of files) {
+    const data = await readDataUrl(file)
+    if (isImage(file)) {
+      const res = await onChat<{ path?: string }>(id, 'image.attach_bytes', {
+        content_base64: data.split(',')[1] ?? '',
+        filename: file.name || 'image.png',
+      })
+      if (res.path && file.name) rememberUpload(res.path, file.name)
+    } else {
+      // (PDFs too: pdf.attach needs poppler, which Hermes may not have.)
+      const res = await onChat<{ ref_text?: string }>(id, 'file.attach', {
+        name: file.name || 'file',
+        data_url: data.startsWith('data:;') ? data.replace('data:;', 'data:application/octet-stream;') : data,
+      })
+      if (res.ref_text) refs.push(res.ref_text)
+    }
+  }
+  const prompt = [refs.join('\n'), text].filter(Boolean).join('\n\n') || 'What do you see in this image?'
+  prompts.set(itemId, prompt)
+  // While it's working, a new message steers the current reply instead of
+  // waiting its turn — the way you'd interrupt a person mid-thought. (Before
+  // the agent is up it can't be steered yet; then it waits its turn.)
+  const steered =
+    busy && !files.length && (await onChat(id, 'session.steer', { text: prompt }).then(() => true, () => false))
+  if (!steered) {
+    const res = await onChat<SubmitResult>(id, 'prompt.submit', { text: prompt, profile: chat.profile })
+    if (res.user_row_id != null) setRowId(id, itemId, res.user_row_id)
   }
 }
 
@@ -1148,13 +1160,23 @@ export async function retry(id: string) {
   if (!chat || !lastUser || lastUser.kind !== 'user') return
   asked.set(id, Date.now())
   patch(id, (c) => ({ items: c.items.filter((i) => i.kind !== 'error'), status: 'thinking' }))
-  const text = prompts.get(lastUser.id) ?? lastUser.text
-  await onChat(id, 'prompt.submit', { text, profile: chat.profile }).catch((e) =>
+  const files = unsent.get(lastUser.id)
+  try {
+    if (files) {
+      await deliver(id, lastUser.id, files.text, files.files, false)
+      unsent.delete(lastUser.id)
+    } else {
+      const text = prompts.get(lastUser.id) ?? lastUser.text
+      const res = await onChat<SubmitResult>(id, 'prompt.submit', { text, profile: chat.profile })
+      // Saved now: the message can be edited, and a later retry replaces its reply instead of asking twice.
+      if (res.user_row_id != null) setRowId(id, lastUser.id, res.user_row_id)
+    }
+  } catch (e) {
     patch(id, (c) => ({
       status: 'error',
-      items: [...c.items, { kind: 'error', id: uid('e'), message: errorText(e), retryable: true }],
-    })),
-  )
+      items: [...c.items, { kind: 'error', id: uid('e'), message: files ? attachError(e) : errorText(e), retryable: true }],
+    }))
+  }
 }
 
 export async function setChatModel(id: string, model: string, provider: string) {
@@ -1295,7 +1317,10 @@ export async function deleteChat(id: string, profile = getChat(id)?.profile ?? '
 
 /** Let go of everything kept for a chat that's gone. */
 function forget(id: string) {
-  for (const item of getChat(id)?.items ?? []) if (item.kind === 'user') prompts.delete(item.id)
+  for (const item of getChat(id)?.items ?? []) if (item.kind === 'user') {
+    prompts.delete(item.id)
+    unsent.delete(item.id)
+  }
   pictures.get(id)?.forEach((url) => URL.revokeObjectURL(url))
   pictures.delete(id)
   pendingReasoning.delete(id)
