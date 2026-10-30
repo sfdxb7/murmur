@@ -21,11 +21,15 @@ g.localStorage = memoryStorage
 g.sessionStorage = memoryStorage
 
 const rpc = vi.fn()
+const socket = { state: 'open' }
 const get = vi.fn()
 const stateListeners: ((state: string) => void)[] = []
 vi.mock('@/hermes/gateway', () => ({
   rpc: (...args: unknown[]) => rpc(...args),
   gateway: {
+    get connectionState() {
+      return socket.state
+    },
     onEvent: () => () => {},
     onRequest: () => () => {},
     onState: (fn: (state: string) => void) => {
@@ -47,7 +51,7 @@ vi.mock('@/hermes/rest', () => ({
 
 const { afterRosterPaint, fetchAgentChats, placeLastChats, ROSTER_PREVIEW_DELAY } = await import('./agents')
 const { scanRoutineResults } = await import('./routines')
-const { loadOlder, openChat, regenerate, retry, send, useChats, wireChats } = await import('./chats')
+const { loadOlder, openChat, regenerate, retry, send, unsentText, useChats, wireChats } = await import('./chats')
 const { HermesError } = await import('@/hermes/rest')
 
 const run = (id: string, routineId: string, at: number): RoutineRun => ({
@@ -417,5 +421,38 @@ describe('a chat whose history could not be read', () => {
     rpc.mockImplementation(async (method: string) => (method === 'session.resume' ? { session_id: 'runtime-n' } : {}))
     await openChat('chat-n', 'default')
     expect(useChats.getState().chats['chat-n']).toMatchObject({ ready: true, items: [] })
+  })
+})
+
+describe('a message sent with the connection down', () => {
+  it('says it is waiting, and keeps its words until Hermes has them', async () => {
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+    let submitted!: (value: { user_row_id: number }) => void
+    rpc.mockImplementation((method: string) => {
+      if (method === 'prompt.submit') return new Promise((resolve) => (submitted = resolve))
+      return Promise.resolve(method === 'session.resume' ? { session_id: 'runtime-w' } : {})
+    })
+    await openChat('chat-w', 'default')
+    socket.state = 'closed'
+    try {
+      const sending = send('chat-w', 'see you at 7')
+      await vi.waitFor(() => expect(submitted).toBeTypeOf('function'))
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).toMatchObject({ kind: 'user', text: 'see you at 7', pending: true })
+      // While its bubble is on screen the box doesn't take the words back; after a reload it does.
+      expect(unsentText('chat-w')).toBe('')
+      const shown = useChats.getState().chats
+      useChats.setState({ chats: {} })
+      expect(unsentText('chat-w')).toBe('see you at 7')
+      useChats.setState({ chats: shown })
+      socket.state = 'open'
+      submitted({ user_row_id: 3 })
+      await sending
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).toMatchObject({ text: 'see you at 7', rowId: 3 })
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).not.toHaveProperty('pending', true)
+      useChats.setState({ chats: {} })
+      expect(unsentText('chat-w')).toBe('')
+    } finally {
+      socket.state = 'open'
+    }
   })
 })

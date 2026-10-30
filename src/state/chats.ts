@@ -789,6 +789,50 @@ const isImage = (f: File) => /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.type)
 /** The full prompt each message went out with (refs included), for Try again. */
 const prompts = new Map<string, string>()
 
+const UNSENT = scoped('murmur:unsent:')
+
+/**
+ * A message's words until Hermes has them, so a reload while it waits on the
+ * connection puts them back in the box instead of losing them.
+ */
+export function unsentText(id: string) {
+  let text = ''
+  try {
+    text = localStorage.getItem(UNSENT + id) ?? ''
+  } catch {
+    /* storage unavailable */
+  }
+  // Still on screen as a message here (waiting, or failed with Try again): it isn't lost.
+  const shown = getChat(id)?.items.some((i) => i.kind === 'user' && i.text === text)
+  return shown ? '' : text
+}
+
+/** The box has taken those words back; from here they're its draft. */
+export function forgetUnsent(id: string) {
+  try {
+    localStorage.removeItem(UNSENT + id)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function holdUnsent(id: string, text: string) {
+  try {
+    localStorage.setItem(UNSENT + id, text)
+  } catch {
+    /* storage unavailable: nothing to put back */
+  }
+}
+
+/** Hermes has it. (A later message still waiting keeps its own words.) */
+function releaseUnsent(id: string, text: string) {
+  try {
+    if (localStorage.getItem(UNSENT + id) === text) localStorage.removeItem(UNSENT + id)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /** Files of a message that never reached Hermes, so trying again sends them too. */
 const unsent = new Map<string, { text: string; files: File[] }>()
 
@@ -831,19 +875,24 @@ export async function send(id: string, text: string, files: File[] = [], opts: S
     text: shown,
     attachments: attachments.length ? attachments : undefined,
     at: Date.now(),
+    pending: gateway.connectionState !== 'open' || undefined,
   }
   asked.set(id, Date.now())
   patch(id, (c) => ({ items: [...c.items, item], status: busy ? c.status : 'thinking' }))
   if (files.length) unsent.set(itemId, { text, files })
+  holdUnsent(id, shown)
 
   try {
     await deliver(id, itemId, text, files, busy)
     unsent.delete(itemId)
+    releaseUnsent(id, shown)
   } catch (e) {
     patch(id, (c) => ({
       status: 'error',
       items: [...c.items, { kind: 'error', id: uid('e'), message: attachError(e), retryable: true }],
     }))
+  } finally {
+    patch(id, (c) => ({ items: c.items.map((i) => (i.id === itemId && i.kind === 'user' && i.pending ? { ...i, pending: undefined } : i)) }))
   }
 }
 
@@ -1185,6 +1234,7 @@ export async function retry(id: string) {
       // Saved now: the message can be edited, and a later retry replaces its reply instead of asking twice.
       if (res.user_row_id != null) setRowId(id, lastUser.id, res.user_row_id)
     }
+    releaseUnsent(id, lastUser.text)
   } catch (e) {
     patch(id, (c) => ({
       status: 'error',
@@ -1335,6 +1385,7 @@ function forget(id: string) {
     prompts.delete(item.id)
     unsent.delete(item.id)
   }
+  forgetUnsent(id)
   pictures.get(id)?.forEach((url) => URL.revokeObjectURL(url))
   pictures.delete(id)
   pendingReasoning.delete(id)

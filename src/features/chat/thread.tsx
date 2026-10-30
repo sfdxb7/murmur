@@ -727,6 +727,11 @@ const UserMessage = memo(function UserMessage({
               </button>
             </div>
           </div>
+          {item.pending && (
+            <p role="status" className="animate-fade text-footnote text-ink-3">
+              Waiting for connection
+            </p>
+          )}
           <MessageMenu
             anchor={held}
             actions={actions}

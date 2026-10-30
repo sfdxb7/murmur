@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState, type RefObject } from 'react'
 import { scoped } from '@/hermes/instance'
+import { forgetUnsent, unsentText } from '@/state/chats'
 
 // What every message box shares: unsent text that survives a reload, and a
 // field that grows with what's typed.
@@ -9,7 +10,15 @@ const PREFIX = scoped('murmur:draft:')
 function readDraft(key?: string) {
   if (!key) return ''
   try {
-    return localStorage.getItem(PREFIX + key) ?? ''
+    const draft = localStorage.getItem(PREFIX + key)
+    if (draft != null) return draft
+    // A message still waiting to send when the page went away comes back as the draft.
+    const unsent = unsentText(key)
+    if (unsent) {
+      writeDraft(key, unsent)
+      forgetUnsent(key)
+    }
+    return unsent
   } catch {
     return ''
   }
