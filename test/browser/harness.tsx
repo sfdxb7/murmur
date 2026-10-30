@@ -28,6 +28,7 @@ function Harness() {
         media={{ sessionId: SESSION, profile: PROFILE }}
         onLoadOlder={() => loadOlder(SESSION)}
         olderHidden={olderHidden}
+        find={new URLSearchParams(location.search).get('find') ?? undefined}
         onApprove={() => {}}
         onAnswer={() => {}}
       />

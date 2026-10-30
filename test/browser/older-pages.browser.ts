@@ -205,3 +205,17 @@ test('a chat opens already at the bottom and does not move after its first paint
   // (The newest turn's own markdown filling in can nudge its first line by a few pixels.)
   expect(Math.max(...frames.map((f) => f.top)) - Math.min(...frames.map((f) => f.top))).toBeLessThan(12)
 })
+
+test('a chat opened from a search pages back to the message that matched and lights it', async ({ page }) => {
+  const hits: Hit[] = []
+  await installHermes(page, hits)
+  await page.goto('/test/browser/harness.html?find=message%20503')
+  const row = page.locator('[data-row]', { hasText: /message 503\b/ })
+  await expect(row).toHaveAttribute('data-found', '', { timeout: 10_000 })
+  await expect(row).toBeInViewport()
+  // It took one older page, not the whole window.
+  expect(hits.map((h) => h.offset)).toEqual([0, 60])
+  await page.waitForTimeout(600)
+  await expect(row).toBeInViewport()
+  await expect(row).not.toHaveAttribute('data-found', { timeout: 4_000 })
+})
