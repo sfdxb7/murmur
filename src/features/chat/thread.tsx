@@ -22,20 +22,21 @@ import { RichText } from '@/features/media/rich-text'
 import { UserAttachments } from '@/features/media/attachments'
 import { ToolMedia } from '@/features/media/tool-media-view'
 import { MediaProvider, type MediaContext } from '@/features/media/context'
-import { mediaPathsOf, proseOf } from '@shared/message.ts'
+import { mediaPathsOf } from '@shared/message.ts'
 import { ApprovalCard } from './approval-card'
 import { ClarifyCard } from './clarify-card'
 import { SecretCard } from './secret-card'
 import { MessageActions } from './message-actions'
 import { MentionText, MentionsProvider } from './mention'
-import { MessageMenu, useLongPress, type MenuAction } from './message-menu'
+import { MessageMenu, type MenuAction } from './message-menu'
 import { useCopy } from './use-copy'
+import { clipboardText, copyMessage } from './copy-message'
 import { AsideCard, CommandCard } from './side-cards'
 import { ERROR_ACTION_LABEL, errorActionOf, type ErrorAction } from './errors'
 import { Plan } from './plan'
 import { HelperPill, Helpers, HelpersBack, useCardInSight } from './helpers'
 import { WakeLine } from './wake-line'
-import { ReactionBadge, ReactionPills, Tapback, useHoldToReact } from './reactions'
+import { ReactionBadge, ReactionPills, Tapback } from './reactions'
 
 type Of<K extends ChatItem['kind']> = Extract<ChatItem, { kind: K }>
 
@@ -509,6 +510,12 @@ const BUBBLE = 'rounded-[20px] rounded-br-md bg-user-bubble px-4 py-2.5 text-bod
 const quiet =
   'pressable relative inline-flex size-8 items-center justify-center rounded-full text-ink-3 hover:bg-fill-1 hover:text-ink-2 after:absolute after:-inset-1.5'
 
+/** Some of this element's words are selected. */
+function selectionIn(el: HTMLElement) {
+  const sel = window.getSelection()
+  return !!sel && !sel.isCollapsed && !!sel.anchorNode && el.contains(sel.anchorNode)
+}
+
 const UserMessage = memo(function UserMessage({
   item,
   isNew,
@@ -527,10 +534,28 @@ const UserMessage = memo(function UserMessage({
   const { copied, copy } = useCopy()
   const [held, setHeld] = useState<HTMLElement | null>(null)
   const close = useCallback(() => setHeld(null), [])
-  const press = useLongPress(setHeld)
+  // What you typed, mentions included. The same string the hover Copy uses.
+  const copySource = useCallback(() => void copyMessage(item.text), [item.text])
+  // Holding the words selects them, with the system's own handles and Copy.
+  // The menu is a right-click away with a mouse, and a tap away on a phone
+  // for the message you can edit. Neither takes over words already selected.
+  const pointer = useRef('mouse')
+  const press = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => void (pointer.current = e.pointerType),
+    onContextMenu: (e: React.MouseEvent<HTMLElement>) => {
+      if (pointer.current !== 'mouse' || selectionIn(e.currentTarget)) return
+      e.preventDefault()
+      setHeld(e.currentTarget)
+    },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      if (pointer.current === 'mouse' || !onEdit || selectionIn(e.currentTarget)) return
+      if ((e.target as HTMLElement).closest?.('a, button')) return
+      setHeld(e.currentTarget)
+    },
+  }
   const actions: MenuAction[] = [
     ...(onEdit ? [{ label: 'Edit', icon: PencilLine, onSelect: () => onEdit(item) }] : []),
-    { label: 'Copy', icon: Copy, onSelect: () => void copy(item.text) },
+    { label: 'Copy', icon: Copy, onSelect: copySource },
   ]
 
   return (
@@ -563,7 +588,7 @@ const UserMessage = memo(function UserMessage({
               {...press}
               className={cn(
                 BUBBLE,
-                'ring-offset-bg transition-[opacity,box-shadow] duration-300 ease-(--ease-out) [-webkit-touch-callout:none] [@media(pointer:coarse)]:select-none',
+                'ring-offset-bg transition-[opacity,box-shadow] duration-300 ease-(--ease-out)',
                 editing && 'ring-2 ring-accent ring-offset-2',
                 held && 'opacity-0',
               )}
@@ -668,7 +693,7 @@ const Turn = memo(function Turn({
   const texts = sections
     .flatMap((s) => s.blocks)
     .flatMap((b) => (b.kind === 'text' && b.item.text ? [b.item.text] : []))
-  const text = texts.map(proseOf).filter(Boolean).join('\n\n')
+  const text = clipboardText(texts)
   // Files the reply itself delivers aren't shown twice under the tool that made them.
   const delivered = new Set(texts.flatMap(mediaPathsOf))
   const tail = sections.at(-1)?.blocks.at(-1)
@@ -689,7 +714,6 @@ const Turn = memo(function Turn({
   const reactTo = onReact && reply?.text && (reply.rowId != null || last) ? reply : undefined
   const [tapAt, setTapAt] = useState<HTMLElement | null>(null)
   const closeTap = useCallback(() => setTapAt(null), [])
-  const hold = useHoldToReact(setTapAt)
   const mine = reactTo?.reactions?.find((r) => r.author === 'user')?.emoji
 
   return (
@@ -729,14 +753,8 @@ const Turn = memo(function Turn({
                 }
                 case 'text':
                   if (!block.item.text) return null
-                  return block.item === reactTo ? (
-                    // Touch: hold the reply to react, as you would a message in Messages.
-                    <div key={block.id} {...hold} className="[@media(pointer:coarse)]:[-webkit-touch-callout:none]">
-                      <RichText text={block.item.text} streaming={block.item.streaming} />
-                    </div>
-                  ) : (
-                    <RichText key={block.id} text={block.item.text} streaming={block.item.streaming} />
-                  )
+                  // Hold (or drag across) the words to select them, as on any page.
+                  return <RichText key={block.id} text={block.item.text} streaming={block.item.streaming} />
                 case 'plan':
                   return <Plan key={block.id} item={block.item} live={live} />
                 case 'helpers':
