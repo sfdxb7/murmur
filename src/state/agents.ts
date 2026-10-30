@@ -160,9 +160,19 @@ export function readable(raw: string | null | undefined, { files = true } = {}) 
   const line = text
     .replace(/MEDIA:\s*(`[^`\n]+`|"[^"\n]+"|\S+)/g, (_, path: string) => fileName(path))
     .split('\n')
-    .find((l) => l.trim())
-  return line?.trim() || (files && attachments[0]?.name) || ''
+    .map((l) => unmark(l).replace(/^\s*·\s*|\s*·\s*$/g, '').trim())
+    .find(Boolean)
+  return line || (files && attachments[0]?.name) || ''
 }
+
+/** Markdown that reads as noise in a one-line preview: bold, code, headings, a table's rules and cells. */
+export const unmark = (s: string) =>
+  s
+    .replace(/\*\*|__|`+/g, '')
+    .replace(/(^|\s)#{1,6}\s/g, '$1')
+    // "| | Email | Inbox triage |" → "Email · Inbox triage".
+    .replace(/:?-{3,}:?/g, '')
+    .replace(/\s*(?:\|\s*)+/g, ' · ')
 
 const fileName = (path: string) => path.replace(/^[`"']|[`"']$/g, '').split(/[\\/]/).pop() || path
 
