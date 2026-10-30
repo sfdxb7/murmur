@@ -188,7 +188,9 @@ export const Markdown = memo(function Markdown({ text, streaming }: { text: stri
     <Streamdown
       key={key}
       className={streaming ? 'md md-streaming' : 'md'}
-      mode="streaming"
+      // Settled history is complete markdown. Streaming mode re-parses it as if
+      // the fence might still be open, which is most of the cost of a long chat.
+      mode={streaming ? 'streaming' : 'static'}
       isAnimating={streaming}
       animated={animation}
       components={components}

@@ -23,6 +23,7 @@ import { UserAttachments } from '@/features/media/attachments'
 import { ToolMedia } from '@/features/media/tool-media-view'
 import { MediaProvider, type MediaContext } from '@/features/media/context'
 import { mediaPathsOf, proseOf } from '@shared/message.ts'
+import { olderPageFollow } from './older-pages'
 import { ApprovalCard } from './approval-card'
 import { ClarifyCard } from './clarify-card'
 import { SecretCard } from './secret-card'
@@ -197,6 +198,12 @@ type Props = Handlers &
     className?: string
     /** Which chat the files in it belong to, and how widgets talk back. */
     media?: MediaContext
+    /**
+     * The reader reached the top. Resolves true when another older page can
+     * still be loaded. A call made while one page is in flight does not start
+     * the next one; the thread asks again only after this resolves.
+     */
+    onLoadOlder?: () => void | Promise<boolean | void>
   }
 
 const NO_MEDIA: MediaContext = {}
@@ -210,6 +217,7 @@ export function Thread({
   footer,
   className,
   media = NO_MEDIA,
+  onLoadOlder,
   editableId,
   editingId,
   onEdit,
@@ -248,6 +256,23 @@ export function Thread({
   const watched = useRef(new Set<string>())
   for (const i of items) if (i.kind === 'approval' && i.status === 'pending') watched.current.add(i.id)
   const rows = useMemo(() => toRows(items, busy, watched.current), [items, busy])
+  // A long transcript paints its tail first. Markdown for every settled turn
+  // is what makes opening the chat hitch; the rest follows on the next frame.
+  const chatKey = media.sessionId ?? ''
+  const [forChat, setForChat] = useState(chatKey)
+  const [showAll, setShowAll] = useState(false)
+  let all = showAll && forChat === chatKey
+  if (chatKey !== forChat) {
+    setForChat(chatKey)
+    setShowAll(false)
+    all = false
+  }
+  const visible = all || rows.length <= 24 ? rows : rows.slice(-24)
+  useEffect(() => {
+    if (all || rows.length <= 24) return
+    const id = requestAnimationFrame(() => setShowAll(true))
+    return () => cancelAnimationFrame(id)
+  }, [all, rows.length, chatKey])
 
   // History appears without animation: whatever is there on first paint, and
   // any batch of several items landing at once (a transcript loading late).
@@ -282,7 +307,7 @@ export function Thread({
   const lastTurn = rows.findLast((r) => r.kind === 'turn')?.id
   // Who reads replies aloud: the agent in a one-to-one chat.
   const voice = media.profile ?? agent?.id
-  const editingAt = editingId ? rows.findIndex((r) => r.id === editingId) : -1
+  const editingAt = editingId ? visible.findIndex((r) => r.id === editingId) : -1
 
   // The composer floats over the end of the thread, outside the message log;
   // the log keeps room for it underneath.
@@ -351,23 +376,122 @@ export function Thread({
     return () => clearTimeout(wait)
   }, [pill, outIds.length, lastRow, reduced])
 
-  // History that lands is already scrolled to its end when it first paints.
+  // Older pages are prepended. Stay at the top when that's where you are (so
+  // the page just loaded is what you see); otherwise keep the same lines in view.
+  // Prepending does not move scrollTop when it is already 0, so the scroll
+  // listener never hears about the next page. Keep asking while they stay parked.
+  // The ask has to wait until the page in flight resolves: the render that paints
+  // it runs before that read drops its in-flight guard, and a second call made
+  // then is the same read, not the next page.
+  const follow = useRef(olderPageFollow())
+  const followChat = useRef(chatKey)
+  if (followChat.current !== chatKey) {
+    followChat.current = chatKey
+    follow.current.reset()
+  }
+  const askMore = useRef(false)
+  const firstId = items[0]?.id
+  // Writing scrollTop fires a scroll event. That echo is not the reader moving.
+  const echoing = useRef(false)
+  const shownTop = useRef<string | undefined>(undefined)
+  const shownAll = useRef(all)
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (!landed.current || !el) return
-    landed.current = false
-    // (Unless you've scrolled up to read: that stays where it is.)
-    if (!stick.isAtBottom) return
-    settleUntil.current = performance.now() + SETTLE_MS
-    el.scrollTop = el.scrollHeight
+    if (!el) return
+    // An older page went in above. (A chat's first history has nothing above it yet.)
+    const prepended = shownTop.current !== undefined && firstId !== shownTop.current
+    shownTop.current = firstId
+    // The rest of a long transcript just went in above its tail.
+    const expanded = all && !shownAll.current
+    shownAll.current = all
+    const result = follow.current.onLayout({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      topId: firstId,
+      atBottom: stick.isAtBottom,
+    })
+    if (result.scrollTop !== el.scrollTop) {
+      echoing.current = true
+      el.scrollTop = result.scrollTop
+      echoing.current = false
+    }
+    askMore.current = result.ask
+    // History that lands is already scrolled to its end when it first paints.
+    // (Unless you've scrolled up to read, or it's an older page: that stays where it is.)
+    // A chat that has just opened is at scrollTop 0, which is not "at the top to read".
+    // The rest of the transcript painting in above the tail is the same landing.
+    if (landed.current || expanded) {
+      landed.current = false
+      if (stick.isAtBottom && !prepended) {
+        settleUntil.current = performance.now() + SETTLE_MS
+        el.scrollTop = el.scrollHeight
+      }
+    }
   })
+
+  // While a chat settles, growth (markdown filling in, the rest of the
+  // transcript) is pinned before it paints. The stick-to-bottom scroll waits
+  // for the next frame, so on its own each growth shows for a frame first.
+  useEffect(() => {
+    const el = scrollRef.current
+    const box = el?.firstElementChild
+    if (!el || !box) return
+    const ro = new ResizeObserver(() => {
+      if (performance.now() < settleUntil.current && stick.isAtBottom) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [scrollRef, stick, chatKey])
+
+  const onLoadOlderRef = useRef(onLoadOlder)
+  onLoadOlderRef.current = onLoadOlder
+  const pumping = useRef<Promise<void> | null>(null)
+  const pumpGeneration = useRef(0)
+  const pump = () => {
+    if (pumping.current) return
+    const generation = pumpGeneration.current
+    let run: Promise<void>
+    run = (async () => {
+      // One page at a time. The next wait sees whether they are still at the top
+      // after this one has landed and the scroll offset has been put back.
+      while (pumpGeneration.current === generation && follow.current.isParked()) {
+        const more = await onLoadOlderRef.current?.()
+        if (more !== true) break
+      }
+    })().finally(() => {
+      if (pumping.current === run) pumping.current = null
+    })
+    pumping.current = run
+  }
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const generation = ++pumpGeneration.current
+    const onScroll = () => {
+      if (echoing.current) return
+      if (follow.current.onScroll(el.scrollTop)) pump()
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      if (pumpGeneration.current === generation) pumpGeneration.current++
+      // The loop in flight belongs to the chat this effect was watching.
+      pumping.current = null
+      el.removeEventListener('scroll', onScroll)
+    }
+  }, [scrollRef, chatKey])
+  useEffect(() => {
+    if (!askMore.current) return
+    askMore.current = false
+    pump()
+  }, [firstId, items.length])
 
   return (
     <MotionConfig reducedMotion="user">
       <MediaProvider value={media}>
         <MentionsProvider>
           <div className={cn('hue-scope relative h-full min-h-0', className)}>
-            <div ref={scrollRef} className="h-full overflow-y-auto overscroll-contain" role="log" aria-label="Messages">
+            <div ref={scrollRef} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]" role="log" aria-label="Messages">
               <div ref={contentRef} className="flex min-h-full flex-col">
                 {/* One reading column (~688px of text), shared with the composer below. */}
                 <div className="relative mx-auto flex w-full max-w-[736px] flex-1 flex-col px-4 pt-6 pb-12 sm:px-6">
@@ -378,9 +502,9 @@ export function Thread({
                     // Rows that leave (an edited message's old reply, an undo) fold away
                     // in place while the rest carries on.
                     <AnimatePresence initial={false} mode="popLayout">
-                      {rows.map((row, i) => {
+                      {visible.map((row, i) => {
                         // 24px between exchanges; a reply sits closer (16px) to what it answers.
-                        const gap = i === 0 ? '' : row.kind === 'turn' && rows[i - 1].kind === 'user' ? 'mt-4' : 'mt-6'
+                        const gap = i === 0 ? '' : row.kind === 'turn' && visible[i - 1].kind === 'user' ? 'mt-4' : 'mt-6'
                         // An edited message keeps its place (and its bubble).
                         const key = row.kind === 'user' ? (row.item.was ?? row.id) : row.id
                         let content: ReactNode

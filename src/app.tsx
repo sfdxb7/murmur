@@ -9,7 +9,7 @@ import { startGateway } from '@/hermes/gateway'
 import { wireChats } from '@/state/chats'
 import { wireSessionLists } from '@/state/sync'
 import { wireChatConnects } from '@/state/hosted-apps-chat'
-import { markWelcomed, useReadiness } from '@/state/readiness'
+import { markWelcomed, useReadiness, useWelcomed } from '@/state/readiness'
 import { useAgents, useFreshAgents } from '@/state/agents'
 import { usePicturesSync } from '@/state/pictures'
 import { useUmbrelContextSync } from '@/state/umbrel-context'
@@ -142,6 +142,7 @@ const useBooting = create(() => ({ booting: true }))
 /** First run (or no model yet) goes to onboarding; everyone else straight in. */
 function Gate({ children }: { children: ReactNode }) {
   const readiness = useReadiness()
+  const welcomed = useWelcomed()
   const [location, navigate] = useLocation()
   // Settings → Hermes stays open during setup: it's how you leave a Hermes that has no model yet.
   const onboarding = location.startsWith('/welcome') || location === '/settings/hermes'
@@ -161,13 +162,19 @@ function Gate({ children }: { children: ReactNode }) {
   }, [away, navigate])
   const groups = useGroupSummaries()
   const [groupsLate, setGroupsLate] = useState(false)
+  // The grace overlaps the roster fetch. Starting it only once the agents
+  // arrived made a slow group log wait out the whole agent load and then
+  // another 1.5s.
   useEffect(() => {
-    if (agents.isPending) return
     const t = setTimeout(() => setGroupsLate(true), 1500)
     return () => clearTimeout(t)
-  }, [agents.isPending])
+  }, [])
   const roster = agents.isPending || (groups.isPending && !groupsLate)
-  const waiting = ((readiness === 'loading' || (roster && readiness !== 'unknown')) && !onboarding) || away
+  // Someone who has already been welcomed has a model; the runtime check
+  // still runs, and a model removed since then redirects when it answers.
+  // Holding the splash on it put every cold open behind that one Hermes call.
+  const checking = readiness === 'loading' && !welcomed
+  const waiting = ((checking || (roster && readiness !== 'unknown')) && !onboarding) || away
   // The splash lingers until the app is drawn, so its mark can settle into the header's.
   const [splash, setSplash] = useState(waiting)
   useLayoutEffect(() => {

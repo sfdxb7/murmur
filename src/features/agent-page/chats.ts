@@ -150,11 +150,12 @@ export function useAgentChatList(of: Agent | string | undefined, { results = tru
     const latest = all.reduce<AgentChat | undefined>((a, c) => (!c.result && (!a || c.at > a.at) ? c : a), undefined)
     return all.map((c) => (c === latest ? { ...c, latest: true } : c))
   }, [conversations.data, runs.data, news.data, activity.data, mainAt, gone, working])
-  // The first time, wait for the routines too, so their lines don't push the chats down a beat later.
-  const waiting = results && !news.data && news.isPending
+  // Chats paint as soon as the conversation list is in. Routine lines fold in
+  // when their results are read: holding the whole list for that meant opening
+  // an agent waited on a message fetch per recent run.
   return {
-    data: waiting ? undefined : data,
-    isPending: conversations.isPending || waiting,
+    data,
+    isPending: conversations.isPending,
     isError: conversations.isError,
     refetch: conversations.refetch,
     /** Whether chats can be pinned and archived here. */

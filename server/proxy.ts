@@ -9,8 +9,12 @@ import tls from 'node:tls'
 import type { Hermes } from './hermes.ts'
 import { HERMES_PARAM } from './connection.ts'
 import { sendReturnPage } from './oauth-return.ts'
+import { encodeBuffer, encodeStream, isCompressibleType, isEventStream, MIN_COMPRESS, preferredEncoding } from './compress.ts'
+import { slimMessages } from './messages.ts'
 
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'te', 'trailer'])
+/** Saved transcript rows. The only Hermes body Murmur rewrites (see messages.ts). */
+const MESSAGES = /^\/hermes\/api\/sessions\/[^/]+\/messages$/
 // Browser-side identity never reaches Hermes; Murmur speaks for the browser.
 // Forwarding headers go too: Hermes trusts them from loopback, and they would
 // let the browser pick the client address Hermes sees.
@@ -92,9 +96,52 @@ export function createProxy(pick: Pick) {
           headers['x-content-type-options'] = 'nosniff'
           // A downloaded page or SVG opened in a tab runs in an opaque origin, away from Murmur.
           if (MARKUP.test(type)) headers['content-security-policy'] = 'sandbox'
-          res.writeHead(up.statusCode ?? 502, headers)
           up.on('error', () => res.destroy())
-          up.pipe(res)
+          const status = up.statusCode ?? 500
+          const eventStream = isEventStream(type)
+          const encoding =
+            !eventStream && status < 400 && !up.headers['content-encoding']
+              ? preferredEncoding(req.headers['accept-encoding'])
+              : null
+          // Transcript rows carry columns the thread never reads. Buffering
+          // this one response lets us drop them before they cross to the phone.
+          // The client already waits for the whole body, so the stream wasn't
+          // painting messages any earlier. An event stream is never buffered
+          // or compressed: a gzip window would hold tokens back.
+          const project = req.method === 'GET' && MESSAGES.test(url.pathname) && status < 400 && !up.headers['content-encoding'] && !eventStream
+          const known = Number(up.headers['content-length'])
+          const streamCompress =
+            !project && Boolean(encoding) && isCompressibleType(type) && !(Number.isFinite(known) && known < MIN_COMPRESS)
+          if (!project && !streamCompress) {
+            res.writeHead(status, headers)
+            up.pipe(res)
+            return
+          }
+          if (!project) {
+            markEncoded(headers, encoding!)
+            res.writeHead(status, headers)
+            const zip = encodeStream(encoding!)
+            zip.on('error', () => res.destroy())
+            up.pipe(zip).pipe(res)
+            return
+          }
+          const chunks: Buffer[] = []
+          up.on('data', (chunk) => chunks.push(chunk as Buffer))
+          up.on('end', () => {
+            if (res.destroyed) return
+            let body = Buffer.concat(chunks)
+            const slimmed = slimMessages(body.toString('utf8'))
+            if (slimmed != null) body = Buffer.from(slimmed)
+            const compressed = encoding ? encodeBuffer(body, encoding) : null
+            if (compressed) {
+              body = compressed
+              markEncoded(headers, encoding!)
+            }
+            headers['content-length'] = body.length
+            delete headers['transfer-encoding']
+            res.writeHead(status, headers)
+            res.end(body)
+          })
         },
       )
       // A <video> seeking, or a closed tab: stop reading from Hermes.
@@ -128,6 +175,10 @@ export function createProxy(pick: Pick) {
       for (const [key, value] of Object.entries(forwardHeaders(req, hermes, {}))) {
         for (const v of Array.isArray(value) ? value : [value]) lines.push(`${key}: ${v}`)
       }
+      // `Sec-WebSocket-Extensions` (permessage-deflate) is forwarded as the
+      // browser sent it and Hermes's 101 is spliced back untouched, so a
+      // negotiated deflate is end to end. Murmur does not compress frames
+      // itself: that would be a second codec on the token stream.
       lines.push('connection: Upgrade', 'upgrade: websocket')
       upstream.write(lines.join('\r\n') + '\r\n\r\n')
       if (head.length) upstream.write(head)
@@ -199,6 +250,17 @@ export function createProxy(pick: Pick) {
   }
 
   return { proxyHttp, proxyUpgrade, proxyOAuthReturn, closeWhere }
+}
+
+function markEncoded(headers: http.OutgoingHttpHeaders, encoding: 'br' | 'gzip') {
+  headers['content-encoding'] = encoding
+  const vary = String(headers.vary ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (!vary.some((part) => part.toLowerCase() === 'accept-encoding')) vary.push('Accept-Encoding')
+  headers.vary = vary.join(', ')
+  delete headers['content-length']
 }
 
 export function refuse(socket: net.Socket, status: number, text: string) {

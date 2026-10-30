@@ -295,16 +295,39 @@ function rowsToItems(rows: Row[], speaker?: Speaker, errands: Map<string, Errand
   return items
 }
 
-/** A chat's saved rows, oldest first. */
-async function readRows(id: string, profile: string) {
+/** How many saved rows a chat paints from. Older rows load on scroll, up to FULL_PAGE. */
+const FIRST_PAGE = 60
+/** As far back as a chat is shown: the same window a single page of 500 used to cover. */
+const FULL_PAGE = 500
+
+/** Rows already shown, oldest first, and whether the window above them is empty. */
+const loadedRows = new Map<string, { rows: Row[]; done: boolean }>()
+/** Ids that came from those rows, so a later page can replace them without dropping a live send. */
+const historyIds = new Map<string, Set<string>>()
+const paging = new Map<string, Promise<boolean>>()
+
+/** A chat's saved rows, oldest first. `offset` skips that many newest rows (`order=latest`). */
+async function readRows(id: string, profile: string, limit = FULL_PAGE, offset = 0) {
   type Res = { messages?: Row[]; data?: Row[] }
   const res = await api.get<Res>(
-    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=500`,
+    `/api/sessions/${encodeURIComponent(id)}/messages?profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`,
   )
   const rows = res.messages ?? res.data ?? []
   // "latest" pages from the end; put them back in reading order.
   if (rows.length > 1 && (rows[0].id ?? 0) > (rows.at(-1)!.id ?? 0)) rows.reverse()
   return rows
+}
+
+/** Replace the saved part of the chat with `rows` and keep anything that arrived live. */
+function showHistory(id: string, rows: Row[], speaker?: Speaker, ready?: boolean) {
+  const history = rowsToItems(rows, speaker)
+  const ids = new Set(history.map((item) => item.id))
+  const prev = historyIds.get(id)
+  historyIds.set(id, ids)
+  patch(id, (c) => {
+    const live = c.items.filter((item) => !ids.has(item.id) && !prev?.has(item.id))
+    return { items: [...history, ...live], ...(ready ? { ready: true } : {}) }
+  })
 }
 
 async function loadHistory(id: string, profile: string, speaker?: Speaker) {
@@ -404,9 +427,17 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   const task = (async () => {
     try {
       if (!chat.ready) {
-        const items = await loadHistory(id, profile, speaker).catch(() => [] as ChatItem[])
+        // The newest page paints on its own. Older pages wait until the reader
+        // scrolls up, so opening a long chat does not pull the whole window.
+        let rows: Row[] = []
+        try {
+          rows = await readRows(id, profile, FIRST_PAGE)
+        } catch {
+          rows = []
+        }
+        loadedRows.set(id, { rows, done: rows.length < FIRST_PAGE })
         // Anything sent while it loaded comes after the history.
-        patch(id, (c) => ({ items: [...items, ...c.items], ready: true }))
+        showHistory(id, rows, speaker, true)
       }
       await attach(id, true)
     } finally {
@@ -415,6 +446,51 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   })()
   opening.set(id, task)
   return task
+}
+
+/**
+ * The next older page, up to 500 rows. A call made while a page is already on
+ * its way waits on that same read; it does not start another. Resolves true
+ * when another page can still be asked for, so the caller can keep going while
+ * the reader stays at the top.
+ */
+export function loadOlder(id: string): Promise<boolean> {
+  const pending = paging.get(id)
+  if (pending) return pending
+  const task = readOlder(id).finally(() => {
+    if (paging.get(id) === task) paging.delete(id)
+  })
+  paging.set(id, task)
+  return task
+}
+
+async function readOlder(id: string): Promise<boolean> {
+  const chat = getChat(id)
+  const state = loadedRows.get(id)
+  if (!chat?.ready || !state || state.done) return false
+  const room = FULL_PAGE - state.rows.length
+  if (room <= 0) {
+    state.done = true
+    return false
+  }
+  const limit = Math.min(FIRST_PAGE, room)
+  let page: Row[]
+  try {
+    page = await readRows(id, chat.profile, limit, state.rows.length)
+  } catch {
+    return false
+  }
+  const have = new Set(state.rows.flatMap((row) => (row.id == null ? [] : [row.id])))
+  const fresh = page.filter((row) => row.id == null || !have.has(row.id))
+  if (!fresh.length) {
+    state.done = true
+    return false
+  }
+  // `order=latest` with an offset is the next older slice. It belongs above what is on screen.
+  state.rows = [...fresh, ...state.rows]
+  state.done = fresh.length < limit || state.rows.length >= FULL_PAGE
+  showHistory(id, state.rows, chat.speaker)
+  return !state.done
 }
 
 /** The chat is off screen. Hermes lets it go once nothing holds it (see the reconnect below). */
@@ -510,9 +586,15 @@ async function settleStale(id: string, since: number) {
   if (!chat || (asked.get(id) ?? 0) >= since || chat.status === 'waiting') return
   const tail = flowTail(chat.items).item
   const cut = tail?.kind === 'assistant' && tail.streaming ? tail.id : undefined
-  const stuck = cut || chat.items.some((i) => i.kind === 'tool' && i.status === 'running')
+  // The connection dropped before this page saw the reply begin (or while a
+  // step ran), and the replay couldn't bring it: the turn is over, so take
+  // its saved steps and reply.
+  const start = chat.items.findLastIndex(startsTurn)
+  const unanswered = start >= 0 && !chat.items.slice(start + 1).some((i) => i.kind === 'assistant')
+  const stuck = cut || unanswered || chat.items.some((i) => i.kind === 'tool' && i.status === 'running')
   if (!stuck) return
   patch(id, (c) => ({ items: settle(c.items), status: 'idle' }))
+  if (unanswered && !cut) return takeSavedTurn(id, chat.items[start].id)
   if (!cut) return
   const history = await loadHistory(id, chat.profile, chat.speaker).catch(() => [] as ChatItem[])
   const final = history.findLast((i) => i.kind === 'assistant')
@@ -520,6 +602,35 @@ async function settleStale(id: string, since: number) {
   patch(id, (c) => ({
     items: c.items.map((i) => (i.id === cut && i.kind === 'assistant' ? { ...i, text: final.text } : i)),
   }))
+}
+
+/**
+ * Replace what this page has of its last turn (from `startId` on) with the
+ * turn as Hermes saved it: its steps and its reply. Asides stay.
+ */
+async function takeSavedTurn(id: string, startId: string) {
+  const chat = getChat(id)
+  if (!chat) return
+  const begun = chat.items.find((i) => i.id === startId)
+  let row = begun && rowOf(begun)
+  let rows: Row[] = []
+  let at = -1
+  // Most turns fit in the newest page; a long run of steps needs the full window.
+  for (const limit of [FIRST_PAGE, FULL_PAGE]) {
+    rows = await readRows(id, chat.profile, limit).catch(() => [] as Row[])
+    row ??= rows.findLast((r) => r.role === 'user')?.id
+    at = rows.findIndex((r) => r.id === row)
+    if (at >= 0 || rows.length < limit) break
+  }
+  if (at < 0) return
+  const saved = rowsToItems(rows.slice(at + 1), chat.speaker, errandsOf(rows))
+  if (!saved.some((i) => i.kind === 'assistant')) return
+  patch(id, (c) => {
+    const start = c.items.findIndex((i) => i.id === startId)
+    if (start < 0 || c.items.slice(start + 1).some((i) => i.kind === 'assistant')) return
+    const after = c.items.slice(start + 1)
+    return { items: [...c.items.slice(0, start + 1), ...saved, ...after.filter(isSide)] }
+  })
 }
 
 // ── Per-chat model choices ──────────────────────────────────────────────────

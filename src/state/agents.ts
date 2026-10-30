@@ -8,7 +8,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/hermes/rest'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { gateway, rpc } from '@/hermes/gateway'
 import { ensureAgentTimezone } from '@/state/timezone'
 import { forgetInheritedMail } from '@/state/mail'
@@ -217,33 +217,50 @@ function newestChat(p: Profile): Agent['lastChat'] {
 const quietRun = (s: LastSession) =>
   !!s.run && (!s.preview || s.preview.startsWith('[IMPORTANT:') || isRunBrief(s.preview) || isQuietExcerpt(s.preview))
 
+/** How long the roster's own calls get before each agent's routine preview starts. */
+export const ROSTER_PREVIEW_DELAY = 800
+
+/** Lets the home screen's first requests go out before per-agent routine previews. */
+export function afterRosterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(() => resolve(), { timeout: 3000 })
+      else resolve()
+    }, ROSTER_PREVIEW_DELAY)
+  })
+}
+
 /**
  * Whether Hermes's newest chat is one of a routine's runs (asked once per
  * chat). A run with nothing to say gives way to the newest chat that did say
  * something: a conversation, or a run with a result. Each run is read once.
+ * One agent at a time: these previews used to leave with every profile at
+ * once and sat on top of the home screen's own calls.
  */
 export async function placeLastChats<P extends Profile>(profiles: P[]): Promise<P[]> {
-  return Promise.all(
-    profiles.map(async (p) => {
-      if (!p.last_session?.id) return p
-      const last = { ...p.last_session, run: Boolean(await runOf(p.name, p.last_session.id).catch(() => null)) }
-      if (!quietRun(last)) return { ...p, last_session: last }
-      try {
-        const res = await api.get<{ sessions?: LastSession[] }>(
-          `/api/sessions?profile=${encodeURIComponent(p.name)}&limit=8&order=recent&min_messages=1`,
-        )
-        for (const row of res.sessions ?? []) {
-          // Only Hermes's scheduler makes chats from "cron".
-          if (row.source !== 'cron') return { ...p, last_session: row }
-          const said = await runSaid(p.name, row)
-          if (said) return { ...p, last_session: { ...row, run: true, preview: said } }
-        }
-        return { ...p, last_session: null }
-      } catch {
-        return { ...p, last_session: last }
-      }
-    }),
-  )
+  const out: P[] = []
+  for (const p of profiles) out.push(await placeOne(p))
+  return out
+}
+
+async function placeOne<P extends Profile>(p: P): Promise<P> {
+  if (!p.last_session?.id) return p
+  const last = { ...p.last_session, run: Boolean(await runOf(p.name, p.last_session.id).catch(() => null)) }
+  if (!quietRun(last)) return { ...p, last_session: last }
+  try {
+    const res = await api.get<{ sessions?: LastSession[] }>(
+      `/api/sessions?profile=${encodeURIComponent(p.name)}&limit=8&order=recent&min_messages=1`,
+    )
+    for (const row of res.sessions ?? []) {
+      // Only Hermes's scheduler makes chats from "cron".
+      if (row.source !== 'cron') return { ...p, last_session: row }
+      const said = await runSaid(p.name, row)
+      if (said) return { ...p, last_session: { ...row, run: true, preview: said } }
+    }
+    return { ...p, last_session: null }
+  } catch {
+    return { ...p, last_session: last }
+  }
 }
 
 const runWords = new Map<string, Promise<string>>()
@@ -281,26 +298,74 @@ export const agentsKey = ['agents'] as const
 /** Agents still being made here: they join the roster when their creator says so. */
 const hatching = new Set<string>()
 
+/** A cron brief or a silence marker is not something to put on the roster while we learn what was actually said. */
+function maskBrief<P extends Profile>(p: P): P {
+  const last = p.last_session
+  const preview = last?.preview
+  if (!last || !preview) return p
+  if (preview.startsWith('[IMPORTANT:') || isRunBrief(preview) || isQuietExcerpt(preview)) {
+    return { ...p, last_session: { ...last, preview: undefined } }
+  }
+  return p
+}
+
+function agentsFrom(profiles: Profile[]): Agent[] {
+  const hues = storedHues()
+  const pending = pendingLooks()
+  const prefix = devPrefix()
+  // Main agent first, then everyone else alphabetically.
+  return profiles
+    .filter((p) => !import.meta.env.DEV || !p.name.startsWith(TEST_PREFIX) || (prefix && p.name.startsWith(prefix)))
+    .filter((p) => !hatching.has(p.name))
+    .map((p) => toAgent(p, hues, pending))
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name))
+}
+
+/**
+ * The roster paints from `profiles.list`. Classifying a quiet routine run
+ * (`placeLastChats`) asks Hermes again per agent and sometimes reads messages.
+ * That starts after the roster's own calls, one agent at a time, instead of
+ * holding the splash or crowding the first paint.
+ */
 export function useAgents() {
-  return useQuery({
-    queryKey: agentsKey,
+  const base = useQuery({
+    queryKey: [...agentsKey, 'profiles'],
     queryFn: async () => {
-      const res = {
-        profiles: await placeLastChats(await listProfiles<Profile & { [key: string]: unknown }>({ include_sessions: true })),
-      }
-      const hues = storedHues()
+      const profiles = await listProfiles<Profile & { [key: string]: unknown }>({ include_sessions: true })
       const pending = pendingLooks()
-      const prefix = devPrefix()
-      for (const p of res.profiles) if (pending[p.name] && !hatching.has(p.name)) void finishLook(p, pending[p.name])
-      // Main agent first, then everyone else alphabetically.
-      return res.profiles
-        .filter((p) => !import.meta.env.DEV || !p.name.startsWith(TEST_PREFIX) || (prefix && p.name.startsWith(prefix)))
-        .filter((p) => !hatching.has(p.name))
-        .map((p) => toAgent(p, hues, pending))
-        .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name))
+      for (const p of profiles) if (pending[p.name] && !hatching.has(p.name)) void finishLook(p, pending[p.name])
+      return profiles
     },
     staleTime: 30_000,
   })
+  const sig = (base.data ?? [])
+    .map((p) => `${p.name}:${p.last_session?.id ?? ''}:${p.last_session?.last_active ?? ''}:${p.canonical_session?.last_active ?? ''}`)
+    .join('|')
+  const placed = useQuery({
+    queryKey: [...agentsKey, 'placed', sig],
+    enabled: Boolean(base.data),
+    queryFn: async () => {
+      await afterRosterPaint()
+      return placeLastChats(base.data!)
+    },
+    staleTime: 30_000,
+  })
+  const data = useMemo(
+    () => (base.data ? agentsFrom(placed.data ?? base.data.map(maskBrief)) : undefined),
+    [base.data, placed.data],
+  )
+  return {
+    data,
+    error: base.error,
+    isPending: base.isPending,
+    isError: base.isError,
+    isSuccess: base.isSuccess,
+    isRefetching: base.isRefetching || placed.isRefetching,
+    refetch: () => {
+      void placed.refetch()
+      return base.refetch()
+    },
+  }
 }
 
 export function useAgent(id: string | undefined) {
@@ -512,16 +577,24 @@ export const toSummary = (s: SessionRow): ChatSummary => ({
  * slotted in by recency; other hidden chats (group plumbing) stay out.
  */
 export async function fetchAgentChats(profile: string, limit = 60): Promise<ChatSummary[]> {
-  const [shown, all, main] = await Promise.all([
+  const [shown, all] = await Promise.all([
     rpc<{ sessions: SessionRow[] }>('session.list', { profile, limit }),
-    // Only for where the main chat sits: this list is in order of last activity.
+    // Where the main chat sits: this list is in order of last activity, hidden rows included.
     rpc<{ sessions: SessionRow[] }>('session.list', { profile, limit, include_hidden: true }).catch(() => ({ sessions: [] })),
-    rpc<{ sessions: SessionRow[] }>('session.list', { profile, title: BOT_CHAT, include_hidden: true }).catch(() => ({ sessions: [] })),
   ])
+  // The hidden list already carries Bot Chat when it moved inside the window.
+  // A third list, by title, only when it didn't (a quiet main chat under a long list).
+  let mainSessions = all.sessions.filter((s) => s.title === BOT_CHAT)
+  if (!mainSessions.some((s) => (s.message_count ?? 0) > 0)) {
+    const main = await rpc<{ sessions: SessionRow[] }>('session.list', { profile, title: BOT_CHAT, include_hidden: true }).catch(() => ({
+      sessions: [] as SessionRow[],
+    }))
+    mainSessions = main.sessions
+  }
   // These aren't routines' runs, so opening one needn't ask.
   for (const s of shown.sessions) if (s.source !== 'cron') knowRun(profile, s.id, null)
   const chats = shown.sessions.filter((s) => s.source !== 'cron' && (s.message_count ?? 0) > 0).map(toSummary)
-  const row = main.sessions.find((s) => s.title === BOT_CHAT && (s.message_count ?? 0) > 0)
+  const row = mainSessions.find((s) => s.title === BOT_CHAT && (s.message_count ?? 0) > 0)
   if (!row) return chats
   const id = row.resolved_id || row.id
   const ids = new Set([row.id, id])

@@ -23,7 +23,72 @@ export function hermesHeaders(headers: Record<string, string> = {}): Record<stri
   return id ? { ...headers, [HERMES_HEADER]: id } : headers
 }
 
+/**
+ * Background upkeep reads each agent's config once per job (timezone, toolsets,
+ * Umbrel). Those reads are the same document and they run one after another, so
+ * an in-flight share is not enough: keep a short copy and drop it on any write.
+ */
+const CONFIG_TTL = 60_000
+type ConfigHit = { at: number; epoch: number; data: unknown }
+const configCache = new Map<string, ConfigHit>()
+const configEpoch = new Map<string, number>()
+const configInflight = new Map<string, Promise<unknown>>()
+
+/** `/api/config` for one profile, or the defaults document. Anything else is not cached. */
+function configScope(path: string): string | null {
+  if (!path.startsWith('/api/config')) return null
+  const q = path.indexOf('?')
+  const pathname = q >= 0 ? path.slice(0, q) : path
+  if (pathname === '/api/config/defaults') return '\0defaults'
+  if (pathname !== '/api/config') return null
+  return new URLSearchParams(q >= 0 ? path.slice(q + 1) : '').get('profile') ?? ''
+}
+
+function forgetConfig(scope: string) {
+  for (const key of configCache.keys()) if (configScope(key) === scope) configCache.delete(key)
+}
+
 async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const scope = configScope(path)
+  // A caller with its own abort keeps its own request. Sharing one would let that abort fail the others.
+  if (method === 'GET' && scope !== null && !init?.signal) return readConfig<T>(scope, path, init)
+  if (scope !== null && (method === 'PUT' || method === 'PATCH' || method === 'DELETE')) return writeConfig<T>(scope, method, path, body, init)
+  return send<T>(method, path, body, init)
+}
+
+function readConfig<T>(scope: string, path: string, init?: RequestInit): Promise<T> {
+  const epoch = configEpoch.get(scope) ?? 0
+  const hit = configCache.get(path)
+  if (hit && hit.epoch === epoch && Date.now() - hit.at < CONFIG_TTL) return Promise.resolve(hit.data as T)
+  const pending = configInflight.get(path) as Promise<T> | undefined
+  if (pending) return pending
+  const run = send<T>('GET', path, undefined, init)
+    .then((data) => {
+      // A write that started while this was in flight has moved the epoch, so this copy is already old.
+      if ((configEpoch.get(scope) ?? 0) === epoch) configCache.set(path, { at: Date.now(), data, epoch })
+      return data
+    })
+    .finally(() => {
+      if (configInflight.get(path) === run) configInflight.delete(path)
+    })
+  configInflight.set(path, run)
+  return run
+}
+
+/** Bump before and after the write, so a read that overlaps it cannot refill the cache with the old document. */
+async function writeConfig<T>(scope: string, method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const epoch = (configEpoch.get(scope) ?? 0) + 1
+  configEpoch.set(scope, epoch)
+  forgetConfig(scope)
+  try {
+    return await send<T>(method, path, body, init)
+  } finally {
+    configEpoch.set(scope, epoch + 1)
+    forgetConfig(scope)
+  }
+}
+
+async function send<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(`/hermes${path}`, {
