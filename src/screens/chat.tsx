@@ -513,6 +513,14 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
                 action="New chat"
                 onAction={newChat}
               />
+            ) : chat?.loadFailed && agent ? (
+              <NotFound
+                hue={agent.hue}
+                title="Couldn’t load this chat"
+                body="Check your connection. It tries again when Hermes is back."
+                action="Try again"
+                onAction={() => openChat(chat.id, agentId, speakerOf(agent)).catch(() => setOpenError(true))}
+              />
             ) : agent && (isDraft || (chat?.ready && !busy)) ? (
               <EmptyState agent={agent} orb={typing ? 'listening' : 'idle'} onStart={(prompt) => post(prompt)} />
             ) : id && !chat?.ready ? (

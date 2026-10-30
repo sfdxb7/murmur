@@ -48,6 +48,8 @@ export type Chat = {
   reasoning?: string
   /** History has been loaded (or the chat is brand new). */
   ready: boolean
+  /** The first read of its history failed (offline, say); it tries again on reconnect. */
+  loadFailed?: boolean
   /** Speaker for one-to-one chats; group chats tag items individually. */
   speaker?: Speaker
   /** Counts finished replies, so widgets know to re-read files the agent may have rewritten. */
@@ -432,10 +434,15 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
         let rows: Row[] = []
         try {
           rows = await readRows(id, profile, FIRST_PAGE)
-        } catch {
-          rows = []
+        } catch (e) {
+          // Not saved yet reads as empty. Anything else isn't an empty chat: say so, and try again later.
+          if (!(e instanceof HermesError && e.status === 404)) {
+            patch(id, () => ({ loadFailed: true }))
+            return
+          }
         }
         loadedRows.set(id, { rows, done: rows.length < FIRST_PAGE })
+        patch(id, () => ({ loadFailed: undefined }))
         // Anything sent while it loaded comes after the history.
         showHistory(id, rows, speaker, true)
       }
@@ -1937,6 +1944,7 @@ export function wireChats() {
   gateway.onState((state) => {
     if (state !== 'open') return
     for (const chat of Object.values(useChats.getState().chats)) {
+      if (chat.loadFailed && viewing.has(chat.id)) void openChat(chat.id, chat.profile, chat.speaker).catch(() => {})
       if (!chat.runtimeId) continue
       if (viewing.has(chat.id) || isBusy(chat)) {
         attach(chat.id).catch(() => patch(chat.id, () => ({ runtimeId: undefined })))

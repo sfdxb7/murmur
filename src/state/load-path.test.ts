@@ -48,6 +48,7 @@ vi.mock('@/hermes/rest', () => ({
 const { afterRosterPaint, fetchAgentChats, placeLastChats, ROSTER_PREVIEW_DELAY } = await import('./agents')
 const { scanRoutineResults } = await import('./routines')
 const { loadOlder, openChat, regenerate, retry, send, useChats, wireChats } = await import('./chats')
+const { HermesError } = await import('@/hermes/rest')
 
 const run = (id: string, routineId: string, at: number): RoutineRun => ({
   id,
@@ -370,5 +371,32 @@ describe('Try again after a send failed', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('a chat whose history could not be read', () => {
+  it('is not shown as empty, and loads once the connection is back', async () => {
+    wireChats()
+    let offline = true
+    get.mockImplementation(async (path: string) => {
+      if (offline) throw new HermesError(0, 'Can’t reach Hermes. Check that it’s running.')
+      return { messages: pageOf(history(3), path).messages }
+    })
+    rpc.mockImplementation(async (method: string) => (method === 'session.resume' ? { session_id: 'runtime-o' } : {}))
+    await openChat('chat-o', 'default')
+    expect(useChats.getState().chats['chat-o']).toMatchObject({ ready: false, loadFailed: true, items: [] })
+    offline = false
+    for (const fn of stateListeners) fn('open')
+    await vi.waitFor(() => expect(useChats.getState().chats['chat-o'].ready).toBe(true))
+    const chat = useChats.getState().chats['chat-o']
+    expect(chat.loadFailed).toBeUndefined()
+    expect(chat.items.map((i) => ('text' in i ? i.text : ''))).toEqual(['message 1', 'message 2', 'message 3'])
+  })
+
+  it('still opens a chat Hermes has not saved yet as empty', async () => {
+    get.mockRejectedValue(new HermesError(404, 'Not found'))
+    rpc.mockImplementation(async (method: string) => (method === 'session.resume' ? { session_id: 'runtime-n' } : {}))
+    await openChat('chat-n', 'default')
+    expect(useChats.getState().chats['chat-n']).toMatchObject({ ready: true, items: [] })
   })
 })
