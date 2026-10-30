@@ -21,11 +21,15 @@ g.localStorage = memoryStorage
 g.sessionStorage = memoryStorage
 
 const rpc = vi.fn()
+const socket = { state: 'open' }
 const get = vi.fn()
 const stateListeners: ((state: string) => void)[] = []
 vi.mock('@/hermes/gateway', () => ({
   rpc: (...args: unknown[]) => rpc(...args),
   gateway: {
+    get connectionState() {
+      return socket.state
+    },
     onEvent: () => () => {},
     onRequest: () => () => {},
     onState: (fn: (state: string) => void) => {
@@ -47,7 +51,8 @@ vi.mock('@/hermes/rest', () => ({
 
 const { afterRosterPaint, fetchAgentChats, placeLastChats, ROSTER_PREVIEW_DELAY } = await import('./agents')
 const { scanRoutineResults } = await import('./routines')
-const { loadOlder, openChat, send, useChats, wireChats } = await import('./chats')
+const { loadOlder, openChat, regenerate, retry, send, unsentText, useChats, wireChats } = await import('./chats')
+const { HermesError } = await import('@/hermes/rest')
 
 const run = (id: string, routineId: string, at: number): RoutineRun => ({
   id,
@@ -221,6 +226,7 @@ describe('openChat', () => {
     const all = useChats.getState().chats['chat-1'].items
     expect(all).toHaveLength(200)
     expect(all[0]).toMatchObject({ text: 'message 1' })
+    expect(useChats.getState().chats['chat-1'].olderHidden).toBeUndefined()
     expect(calls.map((call) => call.limit)).not.toContain(500)
     const before = calls.length
     expect(await loadOlder('chat-1')).toBe(false)
@@ -244,7 +250,11 @@ describe('openChat', () => {
     expect(items[0]).toMatchObject({ text: 'message 101' })
     expect(items.at(-1)).toMatchObject({ text: 'message 600' })
     expect(calls.every((call) => call.limit <= 60)).toBe(true)
-    expect(calls.at(-1)).toEqual({ limit: 20, offset: 480 })
+    expect(calls.at(-2)).toEqual({ limit: 20, offset: 480 })
+    // One row past the window, to know there's more above it.
+    expect(calls.at(-1)).toEqual({ limit: 1, offset: 500 })
+    // The thread says so at the top, rather than passing message 101 off as the beginning.
+    expect(useChats.getState().chats['chat-long'].olderHidden).toBe(true)
   })
 
   it('joins a tool call above the first page to its result once that page loads', async () => {
@@ -310,6 +320,139 @@ describe('a reply that finished while the connection was down', () => {
     } finally {
       vi.useRealTimers()
       vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('a chat of exactly 500 messages', () => {
+  it('reaches its first message without saying older ones are hidden', async () => {
+    const rows = history(500)
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(rows, path).messages }))
+    rpc.mockResolvedValue({ session_id: 'runtime-500' })
+    await openChat('chat-500', 'default')
+    let more = true
+    while (more) more = await loadOlder('chat-500')
+    const chat = useChats.getState().chats['chat-500']
+    expect(chat.items[0]).toMatchObject({ text: 'message 1' })
+    expect(chat.olderHidden).toBeUndefined()
+  })
+})
+
+describe('Try again after a send failed', () => {
+  const finish = (id: string) =>
+    useChats.setState((s) => ({ chats: { ...s.chats, [id]: { ...s.chats[id], status: 'idle' } } }))
+
+  it('remembers the saved message, so the next Try again replaces the reply instead of asking twice', async () => {
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+    let submits = 0
+    rpc.mockImplementation(async (method: string) => {
+      if (method === 'session.resume') return { session_id: 'runtime-r' }
+      if (method === 'prompt.submit' && ++submits === 1) throw new Error('socket closed')
+      if (method === 'prompt.submit') return { user_row_id: 3 }
+      return {}
+    })
+    await openChat('chat-r', 'default')
+    await send('chat-r', 'hello')
+    expect(useChats.getState().chats['chat-r'].items.at(-1)).toMatchObject({ kind: 'error', retryable: true })
+    await retry('chat-r')
+    finish('chat-r')
+    await regenerate('chat-r')
+    const submitted = rpc.mock.calls.filter(([method]) => method === 'prompt.submit').map(([, params]) => params)
+    expect(submitted).toHaveLength(3)
+    expect(submitted[2]).toMatchObject({ text: 'hello', truncate_before_row_id: 3 })
+  })
+
+  it('sends the files again when they never got there', async () => {
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = ''
+        onload: (() => void) | null = null
+        readAsDataURL() {
+          this.result = 'data:text/plain;base64,aGk='
+          queueMicrotask(() => this.onload?.())
+        }
+      },
+    )
+    try {
+      get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+      let attaches = 0
+      rpc.mockImplementation(async (method: string) => {
+        if (method === 'session.resume') return { session_id: 'runtime-f' }
+        if (method === 'file.attach' && ++attaches === 1) throw new Error('upload failed')
+        if (method === 'file.attach') return { ref_text: '@file:notes.txt' }
+        if (method === 'prompt.submit') return { user_row_id: 3 }
+        return {}
+      })
+      await openChat('chat-f', 'default')
+      await send('chat-f', 'read this', [new File(['hi'], 'notes.txt', { type: 'text/plain' })])
+      await retry('chat-f')
+      const submitted = rpc.mock.calls.filter(([method]) => method === 'prompt.submit').map(([, params]) => params)
+      expect(attaches).toBe(2)
+      expect(submitted).toEqual([expect.objectContaining({ text: '@file:notes.txt\n\nread this' })])
+      expect(useChats.getState().chats['chat-f'].items.some((item) => item.kind === 'error')).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('a chat whose history could not be read', () => {
+  it('is not shown as empty, and loads once the connection is back', async () => {
+    wireChats()
+    let offline = true
+    get.mockImplementation(async (path: string) => {
+      if (offline) throw new HermesError(0, 'Can’t reach Hermes. Check that it’s running.')
+      return { messages: pageOf(history(3), path).messages }
+    })
+    rpc.mockImplementation(async (method: string) => (method === 'session.resume' ? { session_id: 'runtime-o' } : {}))
+    await openChat('chat-o', 'default')
+    expect(useChats.getState().chats['chat-o']).toMatchObject({ ready: false, loadFailed: true, items: [] })
+    offline = false
+    for (const fn of stateListeners) fn('open')
+    await vi.waitFor(() => expect(useChats.getState().chats['chat-o'].ready).toBe(true))
+    const chat = useChats.getState().chats['chat-o']
+    expect(chat.loadFailed).toBeUndefined()
+    expect(chat.items.map((i) => ('text' in i ? i.text : ''))).toEqual(['message 1', 'message 2', 'message 3'])
+  })
+
+  it('still opens a chat Hermes has not saved yet as empty', async () => {
+    get.mockRejectedValue(new HermesError(404, 'Not found'))
+    rpc.mockImplementation(async (method: string) => (method === 'session.resume' ? { session_id: 'runtime-n' } : {}))
+    await openChat('chat-n', 'default')
+    expect(useChats.getState().chats['chat-n']).toMatchObject({ ready: true, items: [] })
+  })
+})
+
+describe('a message sent with the connection down', () => {
+  it('says it is waiting, and keeps its words until Hermes has them', async () => {
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(history(2), path).messages }))
+    let submitted!: (value: { user_row_id: number }) => void
+    rpc.mockImplementation((method: string) => {
+      if (method === 'prompt.submit') return new Promise((resolve) => (submitted = resolve))
+      return Promise.resolve(method === 'session.resume' ? { session_id: 'runtime-w' } : {})
+    })
+    await openChat('chat-w', 'default')
+    socket.state = 'closed'
+    try {
+      const sending = send('chat-w', 'see you at 7')
+      await vi.waitFor(() => expect(submitted).toBeTypeOf('function'))
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).toMatchObject({ kind: 'user', text: 'see you at 7', pending: true })
+      // While its bubble is on screen the box doesn't take the words back; after a reload it does.
+      expect(unsentText('chat-w')).toBe('')
+      const shown = useChats.getState().chats
+      useChats.setState({ chats: {} })
+      expect(unsentText('chat-w')).toBe('see you at 7')
+      useChats.setState({ chats: shown })
+      socket.state = 'open'
+      submitted({ user_row_id: 3 })
+      await sending
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).toMatchObject({ text: 'see you at 7', rowId: 3 })
+      expect(useChats.getState().chats['chat-w'].items.at(-1)).not.toHaveProperty('pending', true)
+      useChats.setState({ chats: {} })
+      expect(unsentText('chat-w')).toBe('')
+    } finally {
+      socket.state = 'open'
     }
   })
 })

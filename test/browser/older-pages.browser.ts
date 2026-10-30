@@ -119,6 +119,24 @@ test('a reader parked at the top keeps loading older pages', async ({ page }) =>
   expect(hits).toHaveLength(after)
 })
 
+test('the top of a chat past the 500-message window says older ones are not loaded', async ({ page }) => {
+  const hits: Hit[] = []
+  await installHermes(page, hits)
+  await openThread(page)
+  const note = page.getByText('Showing the latest 500 messages')
+  await expect(note).toHaveCount(0)
+  await log(page).evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await expect(note).toBeVisible({ timeout: 10_000 })
+  // It sits above the oldest message loaded.
+  const [noteTop, firstTop] = await Promise.all([
+    note.evaluate((el) => el.getBoundingClientRect().top),
+    page.getByText(/^message 101\b/).first().evaluate((el) => el.getBoundingClientRect().top),
+  ])
+  expect(noteTop).toBeLessThan(firstTop)
+})
+
 test('wheeling to the top keeps loading older pages', async ({ page }) => {
   const hits: Hit[] = []
   await installHermes(page, hits)
@@ -186,4 +204,18 @@ test('a chat opens already at the bottom and does not move after its first paint
   expect(frames.map((f) => f.gap).filter((gap) => gap > 4)).toEqual([])
   // (The newest turn's own markdown filling in can nudge its first line by a few pixels.)
   expect(Math.max(...frames.map((f) => f.top)) - Math.min(...frames.map((f) => f.top))).toBeLessThan(12)
+})
+
+test('a chat opened from a search pages back to the message that matched and lights it', async ({ page }) => {
+  const hits: Hit[] = []
+  await installHermes(page, hits)
+  await page.goto('/test/browser/harness.html?find=message%20503')
+  const row = page.locator('[data-row]', { hasText: /message 503\b/ })
+  await expect(row).toHaveAttribute('data-found', '', { timeout: 10_000 })
+  await expect(row).toBeInViewport()
+  // It took one older page, not the whole window.
+  expect(hits.map((h) => h.offset)).toEqual([0, 60])
+  await page.waitForTimeout(600)
+  await expect(row).toBeInViewport()
+  await expect(row).not.toHaveAttribute('data-found', { timeout: 4_000 })
 })

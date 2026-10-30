@@ -48,6 +48,10 @@ export type Chat = {
   reasoning?: string
   /** History has been loaded (or the chat is brand new). */
   ready: boolean
+  /** The first read of its history failed (offline, say); it tries again on reconnect. */
+  loadFailed?: boolean
+  /** Paging stopped at the 500-row window with more above it. */
+  olderHidden?: boolean
   /** Speaker for one-to-one chats; group chats tag items individually. */
   speaker?: Speaker
   /** Counts finished replies, so widgets know to re-read files the agent may have rewritten. */
@@ -432,10 +436,15 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
         let rows: Row[] = []
         try {
           rows = await readRows(id, profile, FIRST_PAGE)
-        } catch {
-          rows = []
+        } catch (e) {
+          // Not saved yet reads as empty. Anything else isn't an empty chat: say so, and try again later.
+          if (!(e instanceof HermesError && e.status === 404)) {
+            patch(id, () => ({ loadFailed: true }))
+            return
+          }
         }
         loadedRows.set(id, { rows, done: rows.length < FIRST_PAGE })
+        patch(id, () => ({ loadFailed: undefined }))
         // Anything sent while it loaded comes after the history.
         showHistory(id, rows, speaker, true)
       }
@@ -489,6 +498,11 @@ async function readOlder(id: string): Promise<boolean> {
   // `order=latest` with an offset is the next older slice. It belongs above what is on screen.
   state.rows = [...fresh, ...state.rows]
   state.done = fresh.length < limit || state.rows.length >= FULL_PAGE
+  // At the window's edge after a full page: one more row says whether there's more above that won't show.
+  if (fresh.length === limit && state.rows.length >= FULL_PAGE) {
+    const above = await readRows(id, chat.profile, 1, state.rows.length).catch(() => [])
+    if (above.length) patch(id, () => ({ olderHidden: true }))
+  }
   showHistory(id, state.rows, chat.speaker)
   return !state.done
 }
@@ -775,6 +789,53 @@ const isImage = (f: File) => /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.type)
 /** The full prompt each message went out with (refs included), for Try again. */
 const prompts = new Map<string, string>()
 
+const UNSENT = scoped('murmur:unsent:')
+
+/**
+ * A message's words until Hermes has them, so a reload while it waits on the
+ * connection puts them back in the box instead of losing them.
+ */
+export function unsentText(id: string) {
+  let text = ''
+  try {
+    text = localStorage.getItem(UNSENT + id) ?? ''
+  } catch {
+    /* storage unavailable */
+  }
+  // Still on screen as a message here (waiting, or failed with Try again): it isn't lost.
+  const shown = getChat(id)?.items.some((i) => i.kind === 'user' && i.text === text)
+  return shown ? '' : text
+}
+
+/** The box has taken those words back; from here they're its draft. */
+export function forgetUnsent(id: string) {
+  try {
+    localStorage.removeItem(UNSENT + id)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function holdUnsent(id: string, text: string) {
+  try {
+    localStorage.setItem(UNSENT + id, text)
+  } catch {
+    /* storage unavailable: nothing to put back */
+  }
+}
+
+/** Hermes has it. (A later message still waiting keeps its own words.) */
+function releaseUnsent(id: string, text: string) {
+  try {
+    if (localStorage.getItem(UNSENT + id) === text) localStorage.removeItem(UNSENT + id)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Files of a message that never reached Hermes, so trying again sends them too. */
+const unsent = new Map<string, { text: string; files: File[] }>()
+
 /** Pictures you sent, shown from memory until their chat goes away. */
 const pictures = new Map<string, string[]>()
 
@@ -814,45 +875,59 @@ export async function send(id: string, text: string, files: File[] = [], opts: S
     text: shown,
     attachments: attachments.length ? attachments : undefined,
     at: Date.now(),
+    pending: gateway.connectionState !== 'open' || undefined,
   }
   asked.set(id, Date.now())
   patch(id, (c) => ({ items: [...c.items, item], status: busy ? c.status : 'thinking' }))
+  if (files.length) unsent.set(itemId, { text, files })
+  holdUnsent(id, shown)
 
   try {
-    const refs: string[] = []
-    for (const file of files) {
-      const data = await readDataUrl(file)
-      if (isImage(file)) {
-        const res = await onChat<{ path?: string }>(id, 'image.attach_bytes', {
-          content_base64: data.split(',')[1] ?? '',
-          filename: file.name || 'image.png',
-        })
-        if (res.path && file.name) rememberUpload(res.path, file.name)
-      } else {
-        // (PDFs too: pdf.attach needs poppler, which Hermes may not have.)
-        const res = await onChat<{ ref_text?: string }>(id, 'file.attach', {
-          name: file.name || 'file',
-          data_url: data.startsWith('data:;') ? data.replace('data:;', 'data:application/octet-stream;') : data,
-        })
-        if (res.ref_text) refs.push(res.ref_text)
-      }
-    }
-    const prompt = [refs.join('\n'), text].filter(Boolean).join('\n\n') || 'What do you see in this image?'
-    prompts.set(itemId, prompt)
-    // While it's working, a new message steers the current reply instead of
-    // waiting its turn — the way you'd interrupt a person mid-thought. (Before
-    // the agent is up it can't be steered yet; then it waits its turn.)
-    const steered =
-      busy && !files.length && (await onChat(id, 'session.steer', { text: prompt }).then(() => true, () => false))
-    if (!steered) {
-      const res = await onChat<SubmitResult>(id, 'prompt.submit', { text: prompt, profile: chat.profile })
-      if (res.user_row_id != null) setRowId(id, itemId, res.user_row_id)
-    }
+    await deliver(id, itemId, text, files, busy)
+    unsent.delete(itemId)
+    releaseUnsent(id, shown)
   } catch (e) {
     patch(id, (c) => ({
       status: 'error',
       items: [...c.items, { kind: 'error', id: uid('e'), message: attachError(e), retryable: true }],
     }))
+  } finally {
+    patch(id, (c) => ({ items: c.items.map((i) => (i.id === itemId && i.kind === 'user' && i.pending ? { ...i, pending: undefined } : i)) }))
+  }
+}
+
+/** Upload a message's files, then hand Hermes the prompt (steering a reply that's under way). */
+async function deliver(id: string, itemId: string, text: string, files: File[], busy: boolean) {
+  const chat = getChat(id)
+  if (!chat) return
+  const refs: string[] = []
+  for (const file of files) {
+    const data = await readDataUrl(file)
+    if (isImage(file)) {
+      const res = await onChat<{ path?: string }>(id, 'image.attach_bytes', {
+        content_base64: data.split(',')[1] ?? '',
+        filename: file.name || 'image.png',
+      })
+      if (res.path && file.name) rememberUpload(res.path, file.name)
+    } else {
+      // (PDFs too: pdf.attach needs poppler, which Hermes may not have.)
+      const res = await onChat<{ ref_text?: string }>(id, 'file.attach', {
+        name: file.name || 'file',
+        data_url: data.startsWith('data:;') ? data.replace('data:;', 'data:application/octet-stream;') : data,
+      })
+      if (res.ref_text) refs.push(res.ref_text)
+    }
+  }
+  const prompt = [refs.join('\n'), text].filter(Boolean).join('\n\n') || 'What do you see in this image?'
+  prompts.set(itemId, prompt)
+  // While it's working, a new message steers the current reply instead of
+  // waiting its turn — the way you'd interrupt a person mid-thought. (Before
+  // the agent is up it can't be steered yet; then it waits its turn.)
+  const steered =
+    busy && !files.length && (await onChat(id, 'session.steer', { text: prompt }).then(() => true, () => false))
+  if (!steered) {
+    const res = await onChat<SubmitResult>(id, 'prompt.submit', { text: prompt, profile: chat.profile })
+    if (res.user_row_id != null) setRowId(id, itemId, res.user_row_id)
   }
 }
 
@@ -1148,13 +1223,24 @@ export async function retry(id: string) {
   if (!chat || !lastUser || lastUser.kind !== 'user') return
   asked.set(id, Date.now())
   patch(id, (c) => ({ items: c.items.filter((i) => i.kind !== 'error'), status: 'thinking' }))
-  const text = prompts.get(lastUser.id) ?? lastUser.text
-  await onChat(id, 'prompt.submit', { text, profile: chat.profile }).catch((e) =>
+  const files = unsent.get(lastUser.id)
+  try {
+    if (files) {
+      await deliver(id, lastUser.id, files.text, files.files, false)
+      unsent.delete(lastUser.id)
+    } else {
+      const text = prompts.get(lastUser.id) ?? lastUser.text
+      const res = await onChat<SubmitResult>(id, 'prompt.submit', { text, profile: chat.profile })
+      // Saved now: the message can be edited, and a later retry replaces its reply instead of asking twice.
+      if (res.user_row_id != null) setRowId(id, lastUser.id, res.user_row_id)
+    }
+    releaseUnsent(id, lastUser.text)
+  } catch (e) {
     patch(id, (c) => ({
       status: 'error',
-      items: [...c.items, { kind: 'error', id: uid('e'), message: errorText(e), retryable: true }],
-    })),
-  )
+      items: [...c.items, { kind: 'error', id: uid('e'), message: files ? attachError(e) : errorText(e), retryable: true }],
+    }))
+  }
 }
 
 export async function setChatModel(id: string, model: string, provider: string) {
@@ -1295,7 +1381,11 @@ export async function deleteChat(id: string, profile = getChat(id)?.profile ?? '
 
 /** Let go of everything kept for a chat that's gone. */
 function forget(id: string) {
-  for (const item of getChat(id)?.items ?? []) if (item.kind === 'user') prompts.delete(item.id)
+  for (const item of getChat(id)?.items ?? []) if (item.kind === 'user') {
+    prompts.delete(item.id)
+    unsent.delete(item.id)
+  }
+  forgetUnsent(id)
   pictures.get(id)?.forEach((url) => URL.revokeObjectURL(url))
   pictures.delete(id)
   pendingReasoning.delete(id)
@@ -1912,6 +2002,7 @@ export function wireChats() {
   gateway.onState((state) => {
     if (state !== 'open') return
     for (const chat of Object.values(useChats.getState().chats)) {
+      if (chat.loadFailed && viewing.has(chat.id)) void openChat(chat.id, chat.profile, chat.speaker).catch(() => {})
       if (!chat.runtimeId) continue
       if (viewing.has(chat.id) || isBusy(chat)) {
         attach(chat.id).catch(() => patch(chat.id, () => ({ runtimeId: undefined })))

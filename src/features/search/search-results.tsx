@@ -13,7 +13,8 @@ import { MIN_QUERY, type ChatSearch, type SearchResult } from '@/state/search'
 
 export type Density = 'roomy' | 'compact'
 
-export const resultHref = (r: SearchResult) => `/chat/${r.agent.id}/${r.chatId}`
+export const resultHref = (r: SearchResult) =>
+  `/chat/${r.agent.id}/${r.chatId}${r.find ? `?find=${encodeURIComponent(r.find)}` : ''}`
 const keyOf = (r: SearchResult) => `${r.agent.id}/${r.chatId}`
 
 type Props = {

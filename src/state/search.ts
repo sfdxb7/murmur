@@ -7,7 +7,7 @@ import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from '@t
 import { useEffect, useState } from 'react'
 import { api } from '@/hermes/rest'
 import { rpc } from '@/hermes/gateway'
-import { readable, useAgents, type Agent } from '@/state/agents'
+import { readable, unmark, useAgents, type Agent } from '@/state/agents'
 
 type Hit = {
   session_id: string
@@ -35,6 +35,8 @@ export type SearchResult = {
   from: 'you' | 'agent' | 'other' | 'title'
   /** ms */
   at: number
+  /** The words that matched in a message, so opening the chat can find that message. */
+  find?: string
 }
 
 const HIDDEN_SOURCES = ['cron', 'bot_room']
@@ -49,19 +51,15 @@ export const MIN_QUERY = 2
 
 /** ">>>pine<<<apple" → [{pine, match}, {apple}], tidied for one or two lines. */
 export function parseSnippet(raw: string): SnippetPart[] {
-  const flat = raw
-    .replace(REFS, (_, path: string) => fileName(path))
-    // Escaped newlines from tool output read as "\n\n" otherwise.
-    .replace(/\\[nrt]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/^\.\.\.\s*/, '…')
-    .replace(/\s*\.\.\.$/, '…')
-    // Markdown that reads as noise in a one-line preview.
-    .replace(/\*\*|__|`+/g, '')
-    .replace(/(^|\s)#{1,6}\s/g, '$1')
-    // A table's rules and cells: "| | Email | Inbox triage |" → "Email · Inbox triage".
-    .replace(/:?-{3,}:?/g, '')
-    .replace(/\s*(?:\|\s*)+/g, ' · ')
+  const flat = unmark(
+    raw
+      .replace(REFS, (_, path: string) => fileName(path))
+      // Escaped newlines from tool output read as "\n\n" otherwise.
+      .replace(/\\[nrt]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^\.\.\.\s*/, '…')
+      .replace(/\s*\.\.\.$/, '…'),
+  )
     .replace(/^(…?)\s*·\s*|\s*·\s*(…?)$/g, '$1$2')
     .trim()
   const parts: SnippetPart[] = []
@@ -120,14 +118,15 @@ async function searchAgent(agent: Agent, q: string, signal?: AbortSignal): Promi
     const base = { agent, chatId, title, at: (h.last_active || h.session_started || h.started_at || 0) * 1000 }
     if (!behindTheScenes(h)) {
       const from = h.role === 'user' ? 'you' : h.role === 'assistant' ? 'agent' : 'other'
-      return [{ ...base, from, snippet: parseSnippet(h.snippet ?? '') }]
+      const snippet = parseSnippet(h.snippet ?? '')
+      return [{ ...base, from, snippet, find: snippet.find((p) => p.match)?.text }]
     }
     // Hermes gives one hit per chat, its best; when that's tool noise, the chat
     // still counts if its opening words hold what was typed (a name that does
     // is found by searchTitles).
     const preview = readable(h.preview)
     const inPreview = preview && preview !== title ? markedIn(preview, q) : undefined
-    return inPreview ? [{ ...base, from: 'you', snippet: inPreview }] : []
+    return inPreview ? [{ ...base, from: 'you', snippet: inPreview, find: inPreview.find((p) => p.match)?.text }] : []
   })
 }
 

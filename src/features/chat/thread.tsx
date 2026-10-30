@@ -204,6 +204,10 @@ type Props = Handlers &
      * the next one; the thread asks again only after this resolves.
      */
     onLoadOlder?: () => void | Promise<boolean | void>
+    /** Older messages exist above the oldest one loaded, and won't load here. */
+    olderHidden?: boolean
+    /** Words from a search: the newest message holding them is scrolled to and lit. */
+    find?: string
   }
 
 const NO_MEDIA: MediaContext = {}
@@ -218,6 +222,8 @@ export function Thread({
   className,
   media = NO_MEDIA,
   onLoadOlder,
+  olderHidden,
+  find,
   editableId,
   editingId,
   onEdit,
@@ -230,7 +236,7 @@ export function Thread({
   const reduced = useReducedMotion()
   const settleUntil = useRef(0)
   const still = () => reduced || performance.now() < settleUntil.current
-  const { scrollRef, contentRef, isAtBottom, scrollToBottom, state: stick } = useStickToBottom({
+  const { scrollRef, contentRef, isAtBottom, scrollToBottom, stopScroll, state: stick } = useStickToBottom({
     initial: 'instant',
     // (Read when the content resizes, so the window above is current.)
     get resize() {
@@ -486,6 +492,38 @@ export function Thread({
     pump()
   }, [firstId, items.length])
 
+  // Opened from a search: once the whole transcript is painted, bring the newest
+  // message with the words into view and light it. Not loaded yet: page back for it.
+  const found = useRef('')
+  const [looked, lookAgain] = useState(0)
+  const painted = all || rows.length <= 24
+  useEffect(() => {
+    const words = find?.trim().toLowerCase()
+    const el = scrollRef.current
+    const key = `${chatKey}\0${words}`
+    if (!words || !el || !rows.length || !painted || found.current === key) return
+    const hit = [...el.querySelectorAll<HTMLElement>('[data-row]')].findLast((row) =>
+      row.textContent?.toLowerCase().includes(words),
+    )
+    if (!hit) {
+      const asked = onLoadOlderRef.current?.()
+      found.current = key
+      // Once that page is in, look again; nothing more to load ends the search.
+      void Promise.resolve(asked).then((more) => {
+        if (more !== true || found.current !== key) return
+        found.current = ''
+        lookAgain((n) => n + 1)
+      })
+      return
+    }
+    found.current = key
+    stopScroll()
+    settleUntil.current = 0
+    hit.scrollIntoView({ block: 'center', behavior: 'instant' })
+    hit.dataset.found = ''
+    setTimeout(() => delete hit.dataset.found, 2400)
+  }, [find, chatKey, painted, rows.length, looked, scrollRef, stopScroll])
+
   return (
     <MotionConfig reducedMotion="user">
       <MediaProvider value={media}>
@@ -496,6 +534,11 @@ export function Thread({
                 {/* One reading column (~688px of text), shared with the composer below. */}
                 <div className="relative mx-auto flex w-full max-w-[736px] flex-1 flex-col px-4 pt-6 pb-12 sm:px-6">
                   {lead}
+                  {olderHidden && rows.length > 0 && (
+                    <p className="mx-auto mb-6 max-w-sm text-center text-footnote text-balance text-ink-3">
+                      Showing the latest 500 messages. Older ones aren’t loaded here.
+                    </p>
+                  )}
                   {rows.length === 0 && emptyState ? (
                     <div className="flex flex-1 flex-col items-center justify-center">{emptyState}</div>
                   ) : (
@@ -552,9 +595,10 @@ export function Thread({
                         return (
                           <motion.div
                             key={key}
+                            data-row=""
                             className={cn(
                               gap,
-                              'transition-opacity duration-300 ease-(--ease-out)',
+                              'rounded-3xl transition-[opacity,background-color] duration-300 ease-(--ease-out) data-found:bg-accent-soft',
                               editingAt >= 0 && i > editingAt && 'opacity-40',
                             )}
                             exit={{
@@ -719,6 +763,11 @@ const UserMessage = memo(function UserMessage({
               </button>
             </div>
           </div>
+          {item.pending && (
+            <p role="status" className="animate-fade text-footnote text-ink-3">
+              Waiting for connection
+            </p>
+          )}
           <MessageMenu
             anchor={held}
             actions={actions}

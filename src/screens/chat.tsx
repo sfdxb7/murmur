@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
-import { useLocation } from 'wouter'
+import { useLocation, useSearch } from 'wouter'
 import { MotionConfig } from 'motion/react'
 import { Gauge } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -99,6 +99,8 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
   const isDraft = chatId === 'new'
   const id = chatId && !isDraft ? chatId : undefined
   const chat = useChats((s) => (id ? s.chats[id] : undefined))
+  // Opened from a search result: the words to bring into view.
+  const find = new URLSearchParams(useSearch()).get('find') ?? undefined
   const [openError, setOpenError] = useState(false)
 
   useEffect(() => {
@@ -498,6 +500,8 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
           }
           media={media}
           onLoadOlder={id ? () => loadOlder(id) : undefined}
+          olderHidden={chat?.olderHidden}
+          find={find}
           // The header floats over the messages; they scroll up beneath it.
           className={
             goal
@@ -512,6 +516,14 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
                 body="It may have been deleted. You can start a new one."
                 action="New chat"
                 onAction={newChat}
+              />
+            ) : chat?.loadFailed && agent ? (
+              <NotFound
+                hue={agent.hue}
+                title="Couldn’t load this chat"
+                body="Check your connection. It tries again when Hermes is back."
+                action="Try again"
+                onAction={() => openChat(chat.id, agentId, speakerOf(agent)).catch(() => setOpenError(true))}
               />
             ) : agent && (isDraft || (chat?.ready && !busy)) ? (
               <EmptyState agent={agent} orb={typing ? 'listening' : 'idle'} onStart={(prompt) => post(prompt)} />
