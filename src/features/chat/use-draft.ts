@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { scoped } from '@/hermes/instance'
 import { forgetUnsent, unsentText } from '@/state/chats'
 
@@ -41,12 +41,28 @@ export function useDraft(key?: string) {
     setShown(key)
     setText(readDraft(key))
   }
+  // Written a beat after typing stops; leaving the chat or the page writes what's still waiting.
+  const pending = useRef<{ key: string; text: string } | null>(null)
+  const flush = useRef(() => {
+    const p = pending.current
+    pending.current = null
+    if (p) writeDraft(p.key, p.text)
+  }).current
   useEffect(() => {
     if (!key) return
-    const t = window.setTimeout(() => writeDraft(key, text), 250)
+    pending.current = { key, text }
+    const t = window.setTimeout(flush, 250)
     return () => window.clearTimeout(t)
-  }, [key, text])
+  }, [key, text, flush])
+  useEffect(() => {
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      flush()
+    }
+  }, [key, flush])
   const clear = useCallback(() => {
+    pending.current = null
     setText('')
     if (key) writeDraft(key, '')
   }, [key])
