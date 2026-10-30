@@ -16,6 +16,7 @@ const PROFILE = 'browser'
 
 function Harness() {
   const items = useChats((s) => s.chats[SESSION]?.items ?? NONE)
+  const olderHidden = useChats((s) => s.chats[SESSION]?.olderHidden)
   useEffect(() => {
     void openChat(SESSION, PROFILE)
   }, [])
@@ -26,6 +27,7 @@ function Harness() {
         busy={false}
         media={{ sessionId: SESSION, profile: PROFILE }}
         onLoadOlder={() => loadOlder(SESSION)}
+        olderHidden={olderHidden}
         onApprove={() => {}}
         onAnswer={() => {}}
       />

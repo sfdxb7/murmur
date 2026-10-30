@@ -222,6 +222,7 @@ describe('openChat', () => {
     const all = useChats.getState().chats['chat-1'].items
     expect(all).toHaveLength(200)
     expect(all[0]).toMatchObject({ text: 'message 1' })
+    expect(useChats.getState().chats['chat-1'].olderHidden).toBeUndefined()
     expect(calls.map((call) => call.limit)).not.toContain(500)
     const before = calls.length
     expect(await loadOlder('chat-1')).toBe(false)
@@ -245,7 +246,11 @@ describe('openChat', () => {
     expect(items[0]).toMatchObject({ text: 'message 101' })
     expect(items.at(-1)).toMatchObject({ text: 'message 600' })
     expect(calls.every((call) => call.limit <= 60)).toBe(true)
-    expect(calls.at(-1)).toEqual({ limit: 20, offset: 480 })
+    expect(calls.at(-2)).toEqual({ limit: 20, offset: 480 })
+    // One row past the window, to know there's more above it.
+    expect(calls.at(-1)).toEqual({ limit: 1, offset: 500 })
+    // The thread says so at the top, rather than passing message 101 off as the beginning.
+    expect(useChats.getState().chats['chat-long'].olderHidden).toBe(true)
   })
 
   it('joins a tool call above the first page to its result once that page loads', async () => {
@@ -312,6 +317,20 @@ describe('a reply that finished while the connection was down', () => {
       vi.useRealTimers()
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('a chat of exactly 500 messages', () => {
+  it('reaches its first message without saying older ones are hidden', async () => {
+    const rows = history(500)
+    get.mockImplementation(async (path: string) => ({ messages: pageOf(rows, path).messages }))
+    rpc.mockResolvedValue({ session_id: 'runtime-500' })
+    await openChat('chat-500', 'default')
+    let more = true
+    while (more) more = await loadOlder('chat-500')
+    const chat = useChats.getState().chats['chat-500']
+    expect(chat.items[0]).toMatchObject({ text: 'message 1' })
+    expect(chat.olderHidden).toBeUndefined()
   })
 })
 

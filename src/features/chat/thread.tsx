@@ -204,6 +204,8 @@ type Props = Handlers &
      * the next one; the thread asks again only after this resolves.
      */
     onLoadOlder?: () => void | Promise<boolean | void>
+    /** Older messages exist above the oldest one loaded, and won't load here. */
+    olderHidden?: boolean
   }
 
 const NO_MEDIA: MediaContext = {}
@@ -218,6 +220,7 @@ export function Thread({
   className,
   media = NO_MEDIA,
   onLoadOlder,
+  olderHidden,
   editableId,
   editingId,
   onEdit,
@@ -496,6 +499,11 @@ export function Thread({
                 {/* One reading column (~688px of text), shared with the composer below. */}
                 <div className="relative mx-auto flex w-full max-w-[736px] flex-1 flex-col px-4 pt-6 pb-12 sm:px-6">
                   {lead}
+                  {olderHidden && rows.length > 0 && (
+                    <p className="mx-auto mb-6 max-w-sm text-center text-footnote text-balance text-ink-3">
+                      Showing the latest 500 messages. Older ones aren’t loaded here.
+                    </p>
+                  )}
                   {rows.length === 0 && emptyState ? (
                     <div className="flex flex-1 flex-col items-center justify-center">{emptyState}</div>
                   ) : (

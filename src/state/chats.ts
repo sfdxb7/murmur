@@ -50,6 +50,8 @@ export type Chat = {
   ready: boolean
   /** The first read of its history failed (offline, say); it tries again on reconnect. */
   loadFailed?: boolean
+  /** Paging stopped at the 500-row window with more above it. */
+  olderHidden?: boolean
   /** Speaker for one-to-one chats; group chats tag items individually. */
   speaker?: Speaker
   /** Counts finished replies, so widgets know to re-read files the agent may have rewritten. */
@@ -496,6 +498,11 @@ async function readOlder(id: string): Promise<boolean> {
   // `order=latest` with an offset is the next older slice. It belongs above what is on screen.
   state.rows = [...fresh, ...state.rows]
   state.done = fresh.length < limit || state.rows.length >= FULL_PAGE
+  // At the window's edge after a full page: one more row says whether there's more above that won't show.
+  if (fresh.length === limit && state.rows.length >= FULL_PAGE) {
+    const above = await readRows(id, chat.profile, 1, state.rows.length).catch(() => [])
+    if (above.length) patch(id, () => ({ olderHidden: true }))
+  }
   showHistory(id, state.rows, chat.speaker)
   return !state.done
 }

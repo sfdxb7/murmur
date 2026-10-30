@@ -119,6 +119,24 @@ test('a reader parked at the top keeps loading older pages', async ({ page }) =>
   expect(hits).toHaveLength(after)
 })
 
+test('the top of a chat past the 500-message window says older ones are not loaded', async ({ page }) => {
+  const hits: Hit[] = []
+  await installHermes(page, hits)
+  await openThread(page)
+  const note = page.getByText('Showing the latest 500 messages')
+  await expect(note).toHaveCount(0)
+  await log(page).evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await expect(note).toBeVisible({ timeout: 10_000 })
+  // It sits above the oldest message loaded.
+  const [noteTop, firstTop] = await Promise.all([
+    note.evaluate((el) => el.getBoundingClientRect().top),
+    page.getByText(/^message 101\b/).first().evaluate((el) => el.getBoundingClientRect().top),
+  ])
+  expect(noteTop).toBeLessThan(firstTop)
+})
+
 test('wheeling to the top keeps loading older pages', async ({ page }) => {
   const hits: Hit[] = []
   await installHermes(page, hits)

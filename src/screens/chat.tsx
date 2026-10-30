@@ -498,6 +498,7 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
           }
           media={media}
           onLoadOlder={id ? () => loadOlder(id) : undefined}
+          olderHidden={chat?.olderHidden}
           // The header floats over the messages; they scroll up beneath it.
           className={
             goal
