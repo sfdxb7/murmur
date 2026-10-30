@@ -1,14 +1,73 @@
-// Murmur's service worker, for notifications only. It never touches a
-// request (there's no fetch handler), so the app loads just as it would
-// without it.
+// Murmur's service worker: it shows notifications, and keeps the app's shell
+// so Murmur still opens with no network. Pages and their files always come
+// from the network first; the saved copy is only for when that fails, so an
+// online load is never an old build. Nothing else (Hermes, /murmur/) is touched.
 //
 // Murmur's server sends each note as a push (server/notifications.ts), in
 // the declarative form Safari 18.4 and later shows by itself; other browsers
 // hand it here to show. Every push is shown: browsers stop delivering to a
 // worker that receives pushes and shows nothing.
 
+// Bump to drop every copy an older worker kept.
+const VERSION = 'v1'
+const SHELL = `murmur-shell-${VERSION}`
+const ASSETS = `murmur-assets-${VERSION}`
+
 self.addEventListener('install', () => self.skipWaiting())
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
+self.addEventListener('activate', (event) =>
+  event.waitUntil(
+    (async () => {
+      for (const name of await caches.keys()) if (name !== SHELL && name !== ASSETS) await caches.delete(name)
+      await self.clients.claim()
+    })(),
+  ),
+)
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event
+  if (request.method !== 'GET' || request.headers.has('range')) return
+  const url = new URL(request.url)
+  if (url.origin !== self.location.origin) return
+  if (url.pathname === '/hermes' || url.pathname.startsWith('/hermes/') || url.pathname.startsWith('/murmur/')) return
+  if (request.mode === 'navigate') event.respondWith(page(request))
+  else if (url.pathname.startsWith('/assets/')) event.respondWith(asset(request))
+})
+
+/** Every page is the app: the network's, kept as the one copy; the copy only when the network fails. */
+async function page(request) {
+  const shell = await caches.open(SHELL)
+  try {
+    const res = await fetch(request)
+    if (res.ok && (res.headers.get('content-type') ?? '').includes('text/html')) {
+      // A new build's files replace the last one's.
+      const html = await res.clone().text()
+      const kept = await shell.match('/')
+      if (kept && (await kept.text()) !== html) await caches.delete(ASSETS)
+      await shell.put('/', new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } }))
+    }
+    return res
+  } catch (error) {
+    const kept = await shell.match('/')
+    if (kept) return kept
+    throw error
+  }
+}
+
+/** Built files are named by their contents; a copy is kept as each one loads, for opening offline. */
+async function asset(request) {
+  try {
+    const res = await fetch(request)
+    if (res.ok) {
+      const copy = res.clone()
+      caches.open(ASSETS).then((cache) => cache.put(request, copy))
+    }
+    return res
+  } catch (error) {
+    const kept = await caches.match(request, { cacheName: ASSETS })
+    if (kept) return kept
+    throw error
+  }
+}
 
 self.addEventListener('push', (event) => {
   let note = {}
