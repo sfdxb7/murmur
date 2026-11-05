@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { MotionConfig, motion, useReducedMotion } from 'motion/react'
-import { Eye, Plus } from 'lucide-react'
+import { Eye, EyeOff, Plus } from 'lucide-react'
 import { Button, IconButton } from '@/ui/button'
 import { Skeleton } from '@/ui/skeleton'
 import { cn } from '@/lib/cn'
@@ -29,7 +29,7 @@ export function AgentsScreen() {
   const { data: everyone, isPending } = useAgents()
   // Session only: hidden agents come back dimmed, to unhide from their card.
   const [showHidden, setShowHidden] = useState(false)
-  const anyHidden = everyone?.some((a) => a.hidden)
+  const hiddenCount = everyone?.filter((a) => a.hidden).length ?? 0
   const agents = everyone && (showHidden ? everyone : visibleAgents(everyone))
   const setHidden = useSetAgentHidden()
   const busy = useBusyAgents()
@@ -63,9 +63,12 @@ export function AgentsScreen() {
             <AgentCard agent={agent} />
           </div>
           {agent.hidden && (
-            <IconButton size="sm" label={`Unhide ${agent.name}`} className="absolute top-2 right-2" onClick={() => void setHidden(agent, false)}>
-              <Eye size={18} strokeWidth={1.85} />
-            </IconButton>
+            <div className="absolute top-2 right-2">
+              <Button variant="secondary" size="sm" aria-label={`Unhide ${agent.name}`} className="px-2.5" onClick={() => void setHidden(agent, false)}>
+                <Eye size={16} strokeWidth={1.85} aria-hidden />
+                Unhide
+              </Button>
+            </div>
           )}
         </>
       ) : (
@@ -99,9 +102,10 @@ export function AgentsScreen() {
             <p className="mt-0.5 min-h-[1.375rem] text-subhead text-ink-2">
               {sorted && (sorted.length === 1 ? 'One agent, ready when you are.' : `${sorted.length} agents, each with its own knack.`)}
             </p>
-            {anyHidden && (
-              <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setShowHidden((v) => !v)}>
-                {showHidden ? 'Hide hidden agents' : 'Show hidden agents'}
+            {hiddenCount > 0 && (
+              <Button variant="secondary" size="sm" className="mt-3" aria-pressed={showHidden} onClick={() => setShowHidden((v) => !v)}>
+                {showHidden ? <EyeOff size={16} strokeWidth={1.85} aria-hidden /> : <Eye size={16} strokeWidth={1.85} aria-hidden />}
+                {showHidden ? 'Hide hidden agents' : `Show hidden agents (${hiddenCount})`}
               </Button>
             )}
           </div>
