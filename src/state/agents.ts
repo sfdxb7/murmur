@@ -710,7 +710,7 @@ export async function fetchAgentChats(profile: string, limit = 60): Promise<Chat
 }
 
 // Each agent's chat list as last shown, for a quick open (as the roster is
-// above). Only what a row displays: a preview is kept for the rows that show
+// above), read only by the agent page's list (features/agent-page/stand-in.ts). Only what a row displays: a preview is kept for the rows that show
 // one. Signing out forgets it (state/connection.ts): it has chat titles in it.
 const CHATS_KEY = scoped('murmur:chats')
 const KEPT_CHATS = 60
@@ -763,21 +763,21 @@ export function keepChats(profile: string, chats: KeptChat[]) {
   }
 }
 
-export const chatsQuery = (profile: string | undefined) => ({
-  queryKey: ['chats', profile],
-  enabled: Boolean(profile),
-  // Stale from the start, as the roster is. Routines' lines are the list's own (features/agent-page/chats.ts).
-  initialData: () => {
-    const rows = keptChats(profile ?? '')?.filter((c) => !c.routine)
-    return rows?.length ? rows : undefined
-  },
-  initialDataUpdatedAt: 0,
-  queryFn: () => fetchAgentChats(profile!),
-  staleTime: 10_000,
-})
+/** One chat the person archived or deleted: it must not come back on the next open. */
+export function dropKeptChat(profile: string, id: string) {
+  keepChats(
+    profile,
+    (keptChats(profile) ?? []).filter((c) => c.id !== id),
+  )
+}
 
 export function useAgentChats(profile: string | undefined) {
-  return useQuery(chatsQuery(profile))
+  return useQuery({
+    queryKey: ['chats', profile],
+    enabled: Boolean(profile),
+    queryFn: () => fetchAgentChats(profile!),
+    staleTime: 10_000,
+  })
 }
 
 /** Where a chat came from, when it wasn't Murmur or the Hermes apps. */

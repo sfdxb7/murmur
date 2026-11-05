@@ -12,7 +12,7 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, chatsQuery, deleteAgent, fetchAgentChats, keepChats, keptChats, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
+const { agentsKey, asTheyAre, deleteAgent, dropKeptChat, fetchAgentChats, keepChats, keptChats, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
@@ -354,7 +354,6 @@ describe('the chats kept on this device', () => {
     at: 5,
     ...more,
   })
-  const open = (profile = 'zed') => new QueryObserver(new QueryClient(), chatsQuery(profile))
 
   beforeEach(() => {
     kept = new Map()
@@ -368,21 +367,17 @@ describe('the chats kept on this device', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows at once on a later open, and Hermes is asked all the same', async () => {
-    keepChats('zed', [chat('a'), chat('gone')])
-    rpc.mockImplementation(async () => ({ sessions: [{ id: 'a', title: 'a', message_count: 2, source: 'tui' }] }))
-    const observer = open()
-    expect(observer.getCurrentResult()).toMatchObject({ isPending: false, data: [{ id: 'a' }, { id: 'gone' }] })
-
-    const off = observer.subscribe(() => {})
-    // A chat removed elsewhere goes with the fresh answer.
-    await vi.waitFor(() => expect(observer.getCurrentResult().data?.map((c) => c.id)).toEqual(['a']))
-    off()
+  it('is not what other readers of an agent’s chats start from', () => {
+    keepChats('zed', [chat('a')])
+    expect(new QueryClient().getQueryData(['chats', 'zed'])).toBeUndefined()
   })
 
-  it('leaves a first open waiting, and one agent’s chats out of another’s', () => {
-    keepChats('zed', [chat('a')])
-    expect(open('other').getCurrentResult()).toMatchObject({ isPending: true, data: undefined })
+  it('lets go of one chat the person archived or deleted, so it does not come back on the next open', () => {
+    keepChats('zed', [chat('a'), chat('b')])
+    dropKeptChat('zed', 'a')
+    expect(keptChats('zed')?.map((c) => c.id)).toEqual(['b'])
+    dropKeptChat('zed', 'b')
+    expect(keptChats('zed')).toBeUndefined()
   })
 
   it('keeps what the row shows, a routine’s line too, and no more', () => {
@@ -398,12 +393,6 @@ describe('the chats kept on this device', () => {
       ['b', '', undefined, undefined, undefined, undefined, 5],
     ])
     expect(JSON.stringify([...kept.values()])).not.toMatch(/secret|busy/)
-    // The conversations query takes the conversations only.
-    expect(
-      open()
-        .getCurrentResult()
-        .data?.map((c) => c.id),
-    ).toEqual(['m', 'b'])
   })
 
   it('keeps at most 60 rows an agent', () => {

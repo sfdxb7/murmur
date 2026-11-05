@@ -3,10 +3,11 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { api } from '@/hermes/rest'
-import { keepChats, keptChats, toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type SessionRow } from '@/state/agents'
+import { dropKeptChat, keepChats, keptChats, toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type SessionRow } from '@/state/agents'
+import { standIn } from './stand-in'
 import { replaceGone } from '@/lib/transitions'
 import { routineRunsKey, useContinuedRuns, useRoutineNews, type RoutineRun } from '@/state/routines'
-import { deleteChat, updateChat, type ChatChange } from '@/state/chats'
+import { deleteChat, updateChat, useChats, type ChatChange } from '@/state/chats'
 import { settledAt, useChatActivities, useChatUnread, type ChatActivity } from '@/state/status'
 import { resultLine, standingResults } from '@shared/routines.ts'
 
@@ -153,17 +154,31 @@ export function useAgentChatList(of: Agent | string | undefined, { results = tru
   // The first time, wait for the routines too, so their lines don't push the chats down a beat later.
   const waiting = results && !news.data && news.isPending
   // The list as last shown stands in until everything it's made of has answered, so it moves once, if at all.
+  const dropped = useDropped((s) => s.ids)
+  const live = useChats((s) => s.chats)
   const kept = useMemo(
     (): AgentChat[] | undefined => keptChats(agentId ?? '')?.filter((c) => results || !c.result),
-    [agentId, results],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agentId, results, dropped],
   )
-  const settled = conversations.dataUpdatedAt > 0 && !activity.isPending && !waiting
+  const opened = useMemo(
+    () => Object.values(live).flatMap((c) => (c.profile === agentId ? [c.id] : [])),
+    [live, agentId],
+  )
+  const rest = !activity.isPending && !waiting ? 'settled' : 'waiting'
+  const settled = conversations.dataUpdatedAt > 0 && rest === 'settled'
   useEffect(() => {
     if (results && settled && data && agentId) keepChats(agentId, data)
   }, [results, settled, data, agentId])
-  const early = !settled && kept
+  const early = standIn({
+    kept,
+    hidden: new Set([...gone, ...dropped]),
+    opened,
+    chats: conversations.isError ? 'failed' : conversations.dataUpdatedAt > 0 ? 'answered' : 'waiting',
+    rest,
+  })
   return {
-    data: early ? early.filter((c) => !gone.has(c.id)) : waiting ? undefined : data,
+    data: early ?? (waiting ? undefined : data),
     isPending: !early && (conversations.isPending || waiting),
     isError: conversations.isError,
     refetch: conversations.refetch,
@@ -218,6 +233,13 @@ const setGone = (id: string, on: boolean) =>
     else next.delete(id)
     return { ids: next }
   })
+
+/** Chats archived or deleted for good this visit, for the list as last shown (stand-in.ts), which still holds them. */
+const useDropped = create<{ ids: ReadonlySet<string> }>(() => ({ ids: new Set() }))
+function drop(agentId: string, id: string) {
+  dropKeptChat(agentId, id)
+  useDropped.setState(({ ids }) => ({ ids: new Set(ids).add(id) }))
+}
 
 /** Deletes waiting out their Undo, by chat id. Leaving the page makes them final straight away. */
 const waiting = new Map<string, () => void>()
@@ -288,6 +310,7 @@ export function useChatActions(agentId: string) {
         { ...chat, pinned: undefined, archived: true },
         ...(l ?? []).filter((c) => c.id !== chat.id),
       ])
+      drop(agentId, chat.id)
       const id = `archived-${chat.id}`
       toast('Chat archived', { id, action: { label: 'Undo', onClick: () => void unarchive(chat, chat.pinned) } })
       try {
@@ -355,6 +378,7 @@ export function useChatActions(agentId: string) {
           `/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(chat.id)}`,
         ]))
           replaceGone(path, to)
+        drop(agentId, chat.id)
         await Promise.all([
           settle(),
           chat.routine ? qc.invalidateQueries({ queryKey: routineRunsKey(agentId) }) : undefined,
