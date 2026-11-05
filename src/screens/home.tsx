@@ -46,6 +46,7 @@ function PhoneHome() {
   const search = useChatSearch(active ? text : '')
   const installTip = useInstallTip()
   const solo = useSoloAgent()
+  const hidden = useAgents().data?.some((a) => a.hidden)
   // The roster fades back in after a search, not on every visit.
   const [returning, setReturning] = useState(false)
   // The large title dissolves as it slides under the bar, iOS-style.
@@ -198,19 +199,21 @@ function PhoneHome() {
               transition={{ type: 'spring', duration: 0.5, bounce: 0, delay: 0.06 }}
             >
               {solo ? (
-                <SoloChats agent={solo} title={<SectionTitle>Chats</SectionTitle>} />
+                <>
+                  {/* Hidden agents are unhidden from the gallery, so it stays one tap away. */}
+                  {hidden && (
+                    <div className="flex justify-end px-5">
+                      <AllAgentsChip />
+                    </div>
+                  )}
+                  <SoloChats agent={solo} title={<SectionTitle>Chats</SectionTitle>} />
+                </>
               ) : (
                 <>
                   {/* Everyone you can talk to, as a gallery, one tap off the list. */}
                   <div className="flex items-baseline justify-between px-5">
                     <SectionTitle>Chats</SectionTitle>
-                    <Link
-                      href="/agents"
-                      className="pressable -mr-2 -mb-1 flex h-9 items-center gap-0.5 rounded-full pr-1 pl-2.5 text-footnote font-medium text-accent hover:bg-fill-1"
-                    >
-                      All agents
-                      <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
-                    </Link>
+                    <AllAgentsChip />
                   </div>
                   <Roster
                     density="roomy"
@@ -297,6 +300,7 @@ export function Sidebar() {
   const keys = useResultKeys(search.results, (r) => navigate(resultHref(r)))
   const searching = text.trim().length > 0
   const solo = useSoloAgent()
+  const hidden = useAgents().data?.some((a) => a.hidden)
   useFocusShortcut(input)
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -358,8 +362,8 @@ export function Sidebar() {
             />
           ) : (
             <div key="roster" className="animate-fade">
-              {/* A gallery of one is no way to anywhere. */}
-              {!solo && <AllAgentsLink active={inAgents} />}
+              {/* A gallery of one is no way to anywhere, unless an agent is hidden there. */}
+              {(!solo || hidden) && <AllAgentsLink active={inAgents} />}
               <NeedsYou
                 density="compact"
                 title={
@@ -398,6 +402,19 @@ export function Sidebar() {
         {actions.sheets}
       </aside>
     </MotionConfig>
+  )
+}
+
+/** Phone Home's way to the gallery of agents. */
+function AllAgentsChip() {
+  return (
+    <Link
+      href="/agents"
+      className="pressable -mr-2 -mb-1 flex h-9 items-center gap-0.5 rounded-full pr-1 pl-2.5 text-footnote font-medium text-accent hover:bg-fill-1"
+    >
+      All agents
+      <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
+    </Link>
   )
 }
 

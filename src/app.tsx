@@ -10,7 +10,7 @@ import { wireChats } from '@/state/chats'
 import { wireSessionLists } from '@/state/sync'
 import { wireChatConnects } from '@/state/hosted-apps-chat'
 import { markWelcomed, useReadiness, useWelcomed } from '@/state/readiness'
-import { useAgents, useAgentsAsTheyAre, useFreshAgents } from '@/state/agents'
+import { useAgents, useAgentsAsTheyAre, useFreshAgents, visibleAgents } from '@/state/agents'
 import { usePicturesSync } from '@/state/pictures'
 import { useUmbrelContextSync } from '@/state/umbrel-context'
 import { useDesktopToolsSync } from '@/state/toolsets'
@@ -335,7 +335,8 @@ function useDocumentTitle() {
   const [location] = useLocation()
   const agents = useAgents().data
   const groups = useGroupSummaries().data
-  const chats = (agents ?? []).flatMap((a) => (a.lastChat ? [{ id: a.lastChat.id, at: a.lastChat.at }] : []))
+  // (A hidden agent has no row to clear its chat from.)
+  const chats = visibleAgents(agents ?? []).flatMap((a) => (a.lastChat ? [{ id: a.lastChat.id, at: a.lastChat.at }] : []))
   const count = useUnreadCount(chats) + (groups?.filter((g) => g.unread).length ?? 0)
   const [, kind, id] = /^\/(chat|agents|agent|group|settings)(?:\/([^/]+))?/.exec(location) ?? []
   const key = id && decodeURIComponent(id)

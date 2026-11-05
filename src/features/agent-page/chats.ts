@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { create } from 'zustand'
@@ -155,17 +156,17 @@ export function useAgentChatList(of: Agent | string | undefined, { results = tru
   const waiting = results && !news.data && news.isPending
   // The list as last shown stands in until everything it's made of has answered, so it moves once, if at all.
   const dropped = useDropped((s) => s.ids)
-  const live = useChats((s) => s.chats)
+  // Just this agent's open chats, so a streaming delta elsewhere doesn't re-render the list.
+  const opened = useChats(
+    useShallow((s) => Object.values(s.chats).flatMap((c) => (c.profile === agentId ? [c.id] : []))),
+  )
   const kept = useMemo(
     (): AgentChat[] | undefined => keptChats(agentId ?? '')?.filter((c) => results || !c.result),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [agentId, results, dropped],
   )
-  const opened = useMemo(
-    () => Object.values(live).flatMap((c) => (c.profile === agentId ? [c.id] : [])),
-    [live, agentId],
-  )
-  const rest = !activity.isPending && !waiting ? 'settled' : 'waiting'
+  // Failed counts as answered, so the list isn't held for what won't come.
+  const rest = !activity.isPending && !waiting && !runs.isPending ? 'settled' : 'waiting'
   const settled = conversations.dataUpdatedAt > 0 && rest === 'settled'
   useEffect(() => {
     if (results && settled && data && agentId) keepChats(agentId, data)

@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import { useLocation } from 'wouter'
 import { Buddy, BuddyStack } from '@/ui/buddy'
-import { useAgents } from '@/state/agents'
+import { useAgents, visibleAgents } from '@/state/agents'
 import { useChats } from '@/state/chats'
 import { useGroupLive, useGroupSummaries } from '@/state/groups'
 import { useNeedsYou, useUnreadCount } from '@/state/status'
@@ -84,10 +84,10 @@ function useWaitingElsewhere(chatId: string | undefined): Waiting[] {
 export function useElsewhere(chatId: string | undefined, agentId?: string) {
   const agents = useAgents().data
   const groups = useGroupSummaries().data
-  // (Hermes only says when each agent's newest chat moved, as the roster shows it.)
+  // (Hermes only says when each agent's newest chat moved, as the roster shows it. A hidden agent has no row to clear it from.)
   const latest = useMemo(
     () =>
-      (agents ?? []).flatMap((a) =>
+      visibleAgents(agents ?? []).flatMap((a) =>
         a.lastChat && a.lastChat.id !== chatId && (!agentId || a.id === agentId)
           ? [{ id: a.lastChat.id, at: a.lastChat.at }]
           : [],
