@@ -8,6 +8,7 @@ import {
   ArrowUp,
   Check,
   ChevronRight,
+  EyeOff,
   FolderInput,
   FolderOutput,
   FolderPlus,
@@ -30,6 +31,7 @@ import { cn } from '@/lib/cn'
 import { useGroupRows, type GroupRow } from './groups'
 import { shortTime } from './time'
 import { Bone } from './bone'
+import { useSetAgentHidden } from './hide'
 import { RowMenu, useLongPress, type MenuItem } from './row-menu'
 import type { SectionActions } from './actions'
 import { setExpanded, useExpanded } from './expanded'
@@ -468,6 +470,7 @@ function AgentRow({
 }) {
   const status = useAgentStatus(agent.id)
   const [menu, setMenu] = useState(false)
+  const setHidden = useSetAgentHidden()
   const press = useLongPress(() => setMenu(true))
   const [halo] = useState(fresh)
   const roomy = density === 'roomy'
@@ -555,6 +558,7 @@ function AgentRow({
         items={[
           { label: 'Edit', icon: <Pencil size={18} strokeWidth={1.85} />, onSelect: onEdit },
           ...(move ? [move] : []),
+          { label: 'Hide', icon: <EyeOff size={18} strokeWidth={1.85} />, onSelect: () => void setHidden(agent, true) },
           ...(onDelete
             ? [{ label: 'Delete', icon: <Trash2 size={18} strokeWidth={1.85} />, onSelect: onDelete, danger: true }]
             : []),

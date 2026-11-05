@@ -25,6 +25,7 @@ import { isQuietExcerpt, isRunBrief, resultLine, runTitle } from '@shared/routin
 import { agentName, botTitle } from '@shared/agents.ts'
 import { fetchRunResult, knowRun, runOf } from '@/state/routines'
 import { refreshActivity } from '@/state/status'
+import { patchAgent, writeRecord } from '@/state/records'
 
 type LastSession = {
   id: string
@@ -624,6 +625,15 @@ export async function writeMeta(
     const now = await readAgent(id)
     agent = now && fresh(now)
   }
+}
+
+/** Hide an agent from the lists, or bring it back. It keeps working; only its flag in the hermes-bots record changes. */
+export async function setAgentHidden(qc: QueryClient, id: string, hidden: boolean) {
+  await qc.cancelQueries({ queryKey: agentsKey })
+  await writeRecord(qc, id, 'hermes-bots', (a) => {
+    patchAgent(qc, id, (x) => ({ ...x, hidden }))
+    return { ...a.botMeta, hidden }
+  })
 }
 
 /** Remove an agent with its chats and memory. The main agent can't be deleted. */

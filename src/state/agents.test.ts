@@ -12,7 +12,7 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, toAgent, visibleAgents, soloOf } = await import('./agents')
+const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
@@ -218,5 +218,53 @@ describe('hidden agents', () => {
       ['default', false],
       ['zed', true],
     ])
+  })
+})
+
+describe('hiding an agent', () => {
+  const bots = { title: 'Zed', color: '#4f8', sectionId: 'work' }
+  const zed = (more: Partial<Agent> = {}) => agent('zed', { botMeta: bots, metaRevisions: { 'hermes-bots': 4 }, ...more })
+  const held = (qc: QueryClient) => qc.getQueryData<Agent[]>(agentsKey)!.find((a) => a.id === 'zed')!
+  const setup = (z: Agent) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } })
+    qc.setQueryData<Agent[]>(agentsKey, [agent('default', { isDefault: true }), z])
+    return qc
+  }
+
+  it('writes hidden into the hermes-bots record and keeps the rest of it', async () => {
+    const qc = setup(zed())
+    rpc.mockResolvedValue({ ok: true, applied: { ui_meta: true, ui_meta_revisions: { 'hermes-bots': 5 } } })
+    await setAgentHidden(qc, 'zed', true)
+    expect(rpc).toHaveBeenCalledExactlyOnceWith('profiles.configure', {
+      name: 'zed',
+      ui_meta: { 'hermes-bots': { ...bots, hidden: true } },
+      ui_meta_expected_revisions: { 'hermes-bots': 4 },
+    })
+    expect(held(qc)).toMatchObject({ hidden: true, botMeta: { ...bots, hidden: true }, metaRevisions: { 'hermes-bots': 5 } })
+  })
+
+  it('unhides the same way', async () => {
+    const qc = setup(zed({ hidden: true, botMeta: { ...bots, hidden: true } }))
+    await setAgentHidden(qc, 'zed', false)
+    expect(rpc.mock.calls[0][1].ui_meta).toEqual({ 'hermes-bots': { ...bots, hidden: false } })
+    expect(held(qc).hidden).toBe(false)
+  })
+
+  it('on a conflict reads the record again and writes on top of it, not over it', async () => {
+    const qc = setup(zed())
+    listProfiles.mockResolvedValue([
+      { name: 'zed', is_default: false, ui_meta: { 'hermes-bots': { ...bots, color: '#111', pinned: true } }, ui_meta_revisions: { 'hermes-bots': 5 } },
+    ])
+    rpc
+      .mockResolvedValueOnce({ ok: true, applied: { ui_meta: false, ui_meta_conflicts: { 'hermes-bots': { expected: 4, actual: 5 } } } })
+      .mockResolvedValueOnce({ ok: true, applied: { ui_meta: true, ui_meta_revisions: { 'hermes-bots': 6 } } })
+    await setAgentHidden(qc, 'zed', true)
+    expect(rpc).toHaveBeenCalledTimes(2)
+    expect(rpc.mock.calls[1][1]).toEqual({
+      name: 'zed',
+      ui_meta: { 'hermes-bots': { ...bots, color: '#111', pinned: true, hidden: true } },
+      ui_meta_expected_revisions: { 'hermes-bots': 5 },
+    })
+    expect(held(qc).hidden).toBe(true)
   })
 })

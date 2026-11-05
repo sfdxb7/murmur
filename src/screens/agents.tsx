@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { MotionConfig, motion, useReducedMotion } from 'motion/react'
-import { Plus } from 'lucide-react'
-import { IconButton } from '@/ui/button'
+import { Eye, Plus } from 'lucide-react'
+import { Button, IconButton } from '@/ui/button'
 import { Skeleton } from '@/ui/skeleton'
+import { cn } from '@/lib/cn'
 import { useIsWide } from '@/lib/use-media'
-import { useVisibleAgents, type Agent } from '@/state/agents'
+import { useAgents, visibleAgents, type Agent } from '@/state/agents'
 import { useBusyAgents } from '@/state/status'
 import { sectionOf, useSections } from '@/state/sections'
+import { useSetAgentHidden } from '@/features/home/hide'
 import { useAgentActions } from '@/features/home/actions'
 import { agentAt } from '@/features/home/roster'
 import { AgentCard, NewAgentCard } from '@/features/agent-page/agent-card'
@@ -24,7 +26,12 @@ const grid = 'grid grid-cols-2 gap-3 min-[600px]:grid-cols-3 md:grid-cols-[repea
 let greeted = false
 
 export function AgentsScreen() {
-  const { data: agents, isPending } = useVisibleAgents()
+  const { data: everyone, isPending } = useAgents()
+  // Session only: hidden agents come back dimmed, to unhide from their card.
+  const [showHidden, setShowHidden] = useState(false)
+  const anyHidden = everyone?.some((a) => a.hidden)
+  const agents = everyone && (showHidden ? everyone : visibleAgents(everyone))
+  const setHidden = useSetAgentHidden()
   const busy = useBusyAgents()
   const wide = useIsWide()
   const actions = useAgentActions()
@@ -45,12 +52,25 @@ export function AgentsScreen() {
   const card = (key: string, agent?: Agent) => (
     <motion.li
       key={key}
-      className="grid"
+      className="relative grid"
       initial={arrive ? { opacity: 0, y: 10, scale: 0.97 } : false}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: 'spring', duration: 0.5, bounce: 0.18, delay: Math.min(n++, 8) * 0.04 }}
     >
-      {agent ? <AgentCard agent={agent} /> : <NewAgentCard onClick={actions.newAgent} />}
+      {agent ? (
+        <>
+          <div className={cn('grid', agent.hidden && 'opacity-50')}>
+            <AgentCard agent={agent} />
+          </div>
+          {agent.hidden && (
+            <IconButton size="sm" label={`Unhide ${agent.name}`} className="absolute top-2 right-2" onClick={() => void setHidden(agent, false)}>
+              <Eye size={18} strokeWidth={1.85} />
+            </IconButton>
+          )}
+        </>
+      ) : (
+        <NewAgentCard onClick={actions.newAgent} />
+      )}
     </motion.li>
   )
 
@@ -79,6 +99,11 @@ export function AgentsScreen() {
             <p className="mt-0.5 min-h-[1.375rem] text-subhead text-ink-2">
               {sorted && (sorted.length === 1 ? 'One agent, ready when you are.' : `${sorted.length} agents, each with its own knack.`)}
             </p>
+            {anyHidden && (
+              <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setShowHidden((v) => !v)}>
+                {showHidden ? 'Hide hidden agents' : 'Show hidden agents'}
+              </Button>
+            )}
           </div>
 
           <ul className={grid}>
