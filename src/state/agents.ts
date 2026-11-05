@@ -641,6 +641,7 @@ export async function deleteAgent(agent: Agent) {
   if (agent.isDefault) throw new Error('The main agent can’t be deleted.')
   await api.delete(`/api/profiles/${encodeURIComponent(agent.id)}`)
   setPendingLook(agent.id)
+  keepChats(agent.id, [])
 }
 
 // ── Chats per agent ─────────────────────────────────────────────────────────
@@ -708,13 +709,75 @@ export async function fetchAgentChats(profile: string, limit = 60): Promise<Chat
   return [...rest.slice(0, index), summary, ...rest.slice(index)]
 }
 
+// Each agent's chat list as last shown, for a quick open (as the roster is
+// above). Only what a row displays: a preview is kept for the rows that show
+// one. Signing out forgets it (state/connection.ts): it has chat titles in it.
+const CHATS_KEY = scoped('murmur:chats')
+const KEPT_CHATS = 60
+
+/** A chat as the list showed it, so a kept list lands where the fresh one will. */
+export type KeptChat = ChatSummary & {
+  at: number
+  pinned?: boolean
+  routine?: boolean
+  result?: boolean
+  latest?: boolean
+}
+type KeptChats = { version: string; chats: Record<string, Omit<KeptChat, 'startedAt' | 'messageCount'>[]> }
+
+function readChats(): KeptChats['chats'] {
+  try {
+    const kept = JSON.parse(localStorage.getItem(CHATS_KEY) ?? 'null') as Partial<KeptChats> | null
+    return kept?.version === VERSION && kept.chats && typeof kept.chats === 'object' ? kept.chats : {}
+  } catch {
+    return {}
+  }
+}
+
+export function keptChats(profile: string): KeptChat[] | undefined {
+  const rows = readChats()[profile]
+  return Array.isArray(rows) && rows.length ? rows.map((c) => ({ ...c, startedAt: c.at, messageCount: 0 })) : undefined
+}
+
+/** An empty list forgets the agent's. */
+export function keepChats(profile: string, chats: KeptChat[]) {
+  const all = readChats()
+  if (chats.length)
+    all[profile] = chats.slice(0, KEPT_CHATS).map((c) => ({
+      id: c.id,
+      title: c.title,
+      preview: c.main || c.result ? c.preview : '',
+      source: c.source,
+      at: c.at,
+      ...(c.main && { main: true }),
+      ...(c.pinned && { pinned: true }),
+      ...(c.routine && { routine: true }),
+      ...(c.result && { result: true }),
+      ...(c.latest && { latest: true }),
+    }))
+  else delete all[profile]
+  try {
+    localStorage.setItem(CHATS_KEY, JSON.stringify({ version: VERSION, chats: all } satisfies KeptChats))
+  } catch {
+    // No storage here: the next open waits for Hermes.
+  }
+}
+
+export const chatsQuery = (profile: string | undefined) => ({
+  queryKey: ['chats', profile],
+  enabled: Boolean(profile),
+  // Stale from the start, as the roster is. Routines' lines are the list's own (features/agent-page/chats.ts).
+  initialData: () => {
+    const rows = keptChats(profile ?? '')?.filter((c) => !c.routine)
+    return rows?.length ? rows : undefined
+  },
+  initialDataUpdatedAt: 0,
+  queryFn: () => fetchAgentChats(profile!),
+  staleTime: 10_000,
+})
+
 export function useAgentChats(profile: string | undefined) {
-  return useQuery({
-    queryKey: ['chats', profile],
-    enabled: Boolean(profile),
-    queryFn: () => fetchAgentChats(profile!),
-    staleTime: 10_000,
-  })
+  return useQuery(chatsQuery(profile))
 }
 
 /** Where a chat came from, when it wasn't Murmur or the Hermes apps. */

@@ -316,8 +316,9 @@ export function useMurmurSession() {
 
   const signOut = useCallback(async () => {
     await fetch('/murmur/logout', { method: 'POST' }).catch(() => {})
-    // The roster kept for a quick open (state/agents.ts) has names and chat titles in it, for each Hermes.
+    // What's kept for a quick open (state/agents.ts) has names and chat titles in it, for each Hermes.
     forgetForEveryHermes('murmur:roster')
+    forgetForEveryHermes('murmur:chats')
     location.reload()
   }, [])
 

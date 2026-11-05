@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import type { Agent } from './agents'
 
-vi.mock('@/hermes/rest', () => ({ api: {} }))
+vi.mock('@/hermes/rest', () => ({ api: { delete: vi.fn(async () => ({})) } }))
 vi.mock('@/hermes/compat', () => ({ listProfiles: vi.fn(), listProfileNames: vi.fn() }))
 vi.mock('@/hermes/gateway', () => ({ rpc: vi.fn(), gateway: {} }))
 vi.mock('@/hermes/instance', () => ({ scoped: (key: string) => key }))
@@ -12,7 +12,7 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, fetchAgentChats, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
+const { agentsKey, asTheyAre, chatsQuery, deleteAgent, fetchAgentChats, keepChats, keptChats, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
@@ -338,5 +338,108 @@ describe('opening the chats of an agent', () => {
       return { sessions: [] }
     })
     await expect(fetchAgentChats('zed')).rejects.toThrow('boom')
+  })
+})
+
+describe('the chats kept on this device', () => {
+  let kept: Map<string, string>
+  const KEY = 'murmur:chats'
+  const chat = (id: string, more: object = {}) => ({
+    id,
+    title: id,
+    preview: '',
+    startedAt: 0,
+    messageCount: 0,
+    source: '',
+    at: 5,
+    ...more,
+  })
+  const open = (profile = 'zed') => new QueryObserver(new QueryClient(), chatsQuery(profile))
+
+  beforeEach(() => {
+    kept = new Map()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => kept.get(key) ?? null,
+      setItem: (key: string, value: string) => void kept.set(key, value),
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('shows at once on a later open, and Hermes is asked all the same', async () => {
+    keepChats('zed', [chat('a'), chat('gone')])
+    rpc.mockImplementation(async () => ({ sessions: [{ id: 'a', title: 'a', message_count: 2, source: 'tui' }] }))
+    const observer = open()
+    expect(observer.getCurrentResult()).toMatchObject({ isPending: false, data: [{ id: 'a' }, { id: 'gone' }] })
+
+    const off = observer.subscribe(() => {})
+    // A chat removed elsewhere goes with the fresh answer.
+    await vi.waitFor(() => expect(observer.getCurrentResult().data?.map((c) => c.id)).toEqual(['a']))
+    off()
+  })
+
+  it('leaves a first open waiting, and one agent’s chats out of another’s', () => {
+    keepChats('zed', [chat('a')])
+    expect(open('other').getCurrentResult()).toMatchObject({ isPending: true, data: undefined })
+  })
+
+  it('keeps what the row shows, a routine’s line too, and no more', () => {
+    keepChats('zed', [
+      chat('m', { main: true, preview: 'hello', pinned: true, latest: true, busy: 'working', messageCount: 9 }),
+      chat('r', { routine: true, result: true, preview: 'found it', source: 'routine' }),
+      chat('b', { preview: 'secret words' }),
+    ])
+    const out = keptChats('zed')!
+    expect(out.map((c) => [c.id, c.preview, c.routine, c.main, c.pinned, c.latest, c.at])).toEqual([
+      ['m', 'hello', undefined, true, true, true, 5],
+      ['r', 'found it', true, undefined, undefined, undefined, 5],
+      ['b', '', undefined, undefined, undefined, undefined, 5],
+    ])
+    expect(JSON.stringify([...kept.values()])).not.toMatch(/secret|busy/)
+    // The conversations query takes the conversations only.
+    expect(
+      open()
+        .getCurrentResult()
+        .data?.map((c) => c.id),
+    ).toEqual(['m', 'b'])
+  })
+
+  it('keeps at most 60 rows an agent', () => {
+    keepChats(
+      'zed',
+      Array.from({ length: 80 }, (_, i) => chat(`c${i}`)),
+    )
+    expect(keptChats('zed')).toHaveLength(60)
+  })
+
+  it('is forgotten with its agent, and only its agent', async () => {
+    keepChats('zed', [chat('a')])
+    keepChats('old', [chat('b')])
+    await deleteAgent(agent('old'))
+    expect(keptChats('old')).toBeUndefined()
+    expect(keptChats('zed')).toHaveLength(1)
+  })
+
+  it('is ignored when unreadable, of another version, or empty', () => {
+    kept.set(KEY, 'not json')
+    expect(keptChats('zed')).toBeUndefined()
+    kept.set(KEY, JSON.stringify({ version: '0.0.1', chats: { zed: [chat('a')] } }))
+    expect(keptChats('zed')).toBeUndefined()
+    kept.set(KEY, JSON.stringify({ version: __MURMUR_VERSION__, chats: { zed: 'x' } }))
+    expect(keptChats('zed')).toBeUndefined()
+    keepChats('zed', [])
+    expect(keptChats('zed')).toBeUndefined()
+  })
+
+  it('does not throw when the browser won’t keep it', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException('full', 'QuotaExceededError')
+      },
+    })
+    expect(() => keepChats('zed', [chat('a')])).not.toThrow()
   })
 })

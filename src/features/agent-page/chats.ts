@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { api } from '@/hermes/rest'
-import { toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type SessionRow } from '@/state/agents'
+import { keepChats, keptChats, toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type SessionRow } from '@/state/agents'
 import { replaceGone } from '@/lib/transitions'
 import { routineRunsKey, useContinuedRuns, useRoutineNews, type RoutineRun } from '@/state/routines'
 import { deleteChat, updateChat, type ChatChange } from '@/state/chats'
@@ -152,9 +152,19 @@ export function useAgentChatList(of: Agent | string | undefined, { results = tru
   }, [conversations.data, runs.data, news.data, activity.data, mainAt, gone, working])
   // The first time, wait for the routines too, so their lines don't push the chats down a beat later.
   const waiting = results && !news.data && news.isPending
+  // The list as last shown stands in until everything it's made of has answered, so it moves once, if at all.
+  const kept = useMemo(
+    (): AgentChat[] | undefined => keptChats(agentId ?? '')?.filter((c) => results || !c.result),
+    [agentId, results],
+  )
+  const settled = conversations.dataUpdatedAt > 0 && !activity.isPending && !waiting
+  useEffect(() => {
+    if (results && settled && data && agentId) keepChats(agentId, data)
+  }, [results, settled, data, agentId])
+  const early = !settled && kept
   return {
-    data: waiting ? undefined : data,
-    isPending: conversations.isPending || waiting,
+    data: early ? early.filter((c) => !gone.has(c.id)) : waiting ? undefined : data,
+    isPending: !early && (conversations.isPending || waiting),
     isError: conversations.isError,
     refetch: conversations.refetch,
     /** Whether chats can be pinned and archived here. */
