@@ -12,7 +12,7 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
+const { agentsKey, asTheyAre, fetchAgentChats, createAgent, revealAgent, rosterQuery, saysGone, setAgentHidden, toAgent, visibleAgents, soloOf } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
@@ -266,5 +266,42 @@ describe('hiding an agent', () => {
       ui_meta_expected_revisions: { 'hermes-bots': 5 },
     })
     expect(held(qc).hidden).toBe(true)
+  })
+})
+
+describe('opening the chats of an agent', () => {
+  const row = (id: string, more: object = {}) => ({ id, title: id, message_count: 2, started_at: 1, source: 'tui', ...more })
+  const lists = (shown: object[], all: object[], main: object[] = []) =>
+    rpc.mockImplementation(async (_m: string, p: { title?: string; include_hidden?: boolean }) => ({
+      sessions: p.title ? main : p.include_hidden ? all : shown,
+    }))
+  const calls = () => rpc.mock.calls.map((c) => [c[0], c[1]])
+
+  it('with the main chat inside the window, lists twice and skips the title lookup', async () => {
+    const bot = row('m', { title: 'Bot Chat' })
+    lists([row('a'), row('b')], [row('a'), bot, row('b')])
+    const out = await fetchAgentChats('zed')
+    expect(calls()).toEqual([
+      ['session.list', { profile: 'zed', limit: 60 }],
+      ['session.list', { profile: 'zed', limit: 60, include_hidden: true }],
+    ])
+    expect(out.map((c) => c.id)).toEqual(['a', 'm', 'b'])
+    expect(out[1].main).toBe(true)
+  })
+
+  it('with the main chat older than the window, looks it up by title and puts it last', async () => {
+    lists([row('a'), row('b')], [row('a'), row('b')], [row('m', { title: 'Bot Chat' })])
+    const out = await fetchAgentChats('zed')
+    expect(calls()).toEqual([
+      ['session.list', { profile: 'zed', limit: 60 }],
+      ['session.list', { profile: 'zed', limit: 60, include_hidden: true }],
+      ['session.list', { profile: 'zed', title: 'Bot Chat', include_hidden: true }],
+    ])
+    expect(out.map((c) => c.id)).toEqual(['a', 'b', 'm'])
+  })
+
+  it('keeps other hidden chats out', async () => {
+    lists([row('a')], [row('a'), row('h')])
+    expect((await fetchAgentChats('zed')).map((c) => c.id)).toEqual(['a'])
   })
 })

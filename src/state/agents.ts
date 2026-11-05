@@ -686,16 +686,19 @@ export const toSummary = (s: SessionRow): ChatSummary => ({
  * slotted in by recency; other hidden chats (group plumbing) stay out.
  */
 export async function fetchAgentChats(profile: string, limit = 60): Promise<ChatSummary[]> {
-  const [shown, all, main] = await Promise.all([
+  const [shown, all] = await Promise.all([
     rpc<{ sessions: SessionRow[] }>('session.list', { profile, limit }),
     // Only for where the main chat sits: this list is in order of last activity.
     rpc<{ sessions: SessionRow[] }>('session.list', { profile, limit, include_hidden: true }).catch(() => ({ sessions: [] })),
-    rpc<{ sessions: SessionRow[] }>('session.list', { profile, title: BOT_CHAT, include_hidden: true }).catch(() => ({ sessions: [] })),
   ])
   // These aren't routines' runs, so opening one needn't ask.
   for (const s of shown.sessions) if (s.source !== 'cron') knowRun(profile, s.id, null)
   const chats = shown.sessions.filter((s) => s.source !== 'cron' && (s.message_count ?? 0) > 0).map(toSummary)
-  const row = main.sessions.find((s) => s.title === BOT_CHAT && (s.message_count ?? 0) > 0)
+  const isMain = (s: SessionRow) => s.title === BOT_CHAT && (s.message_count ?? 0) > 0
+  // Rows carry no hidden flag, so the window can't say which others are hidden; the lookup is only for a main chat older than it.
+  const row =
+    all.sessions.find(isMain) ??
+    (await rpc<{ sessions: SessionRow[] }>('session.list', { profile, title: BOT_CHAT, include_hidden: true }).catch(() => ({ sessions: [] }))).sessions.find(isMain)
   if (!row) return chats
   const id = row.resolved_id || row.id
   const ids = new Set([row.id, id])
