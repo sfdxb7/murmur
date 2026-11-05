@@ -12,7 +12,7 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, toAgent, visibleAgents } = await import('./agents')
+const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, toAgent, visibleAgents, soloOf } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
@@ -199,6 +199,13 @@ describe('hidden agents', () => {
     const all = [agent('a'), agent('b', { hidden: true }), agent('c')]
     expect(visibleAgents(all).map((a) => a.id)).toEqual(['a', 'c'])
     expect(visibleAgents([agent('b', { hidden: true })])).toEqual([])
+  })
+
+  it('leave one visible agent alone in the roster, and none when all are hidden or all shown', () => {
+    expect(soloOf([agent('a'), agent('b', { hidden: true })])?.id).toBe('a')
+    expect(soloOf([agent('a'), agent('b')])).toBeUndefined()
+    expect(soloOf([agent('a', { hidden: true }), agent('b', { hidden: true })])).toBeUndefined()
+    expect(soloOf(undefined)).toBeUndefined()
   })
 
   it('stay in the roster itself, so chats, groups and mentions still find them', async () => {

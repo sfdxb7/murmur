@@ -372,6 +372,12 @@ export function useAgents() {
 
 export const visibleAgents = (agents: Agent[]) => agents.filter((a) => !a.hidden)
 
+/** The only agent people can see, if there is just one. */
+export const soloOf = (agents: Agent[] | undefined) => {
+  const shown = agents && visibleAgents(agents)
+  return shown?.length === 1 ? shown[0] : undefined
+}
+
 /** The roster for lists to browse; lookups (chats, groups, mentions) use useAgents, which keeps hidden agents. */
 export function useVisibleAgents() {
   const roster = useAgents()

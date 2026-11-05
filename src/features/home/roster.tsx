@@ -20,7 +20,7 @@ import {
 import { Orb, OrbStack } from '@/ui/orb'
 import { Buddy, BuddyStack } from '@/ui/buddy'
 import { Button } from '@/ui/button'
-import { fetchAgentChats, useAgentChats, useVisibleAgents, type Agent } from '@/state/agents'
+import { fetchAgentChats, useAgentChats, useAgents, useVisibleAgents, type Agent } from '@/state/agents'
 import { settledAt, useAgentStatus, useBusyAgents, useChatUnread, useNeedsYou, useUnreadCount } from '@/state/status'
 import { sectionOf, setFolded, useFoldedMap, type Section } from '@/state/sections'
 import { prefetchGroup, useGroupSummaries } from '@/state/groups'
@@ -1111,7 +1111,7 @@ function RowLink({
 
 export function NeedsYou({ density, title }: { density: Density; title?: ReactNode }) {
   const items = useNeedsYou()
-  const { data: agents } = useVisibleAgents()
+  const { data: agents } = useAgents()
   const rows = items.flatMap((item) => {
     const agent = agents?.find((a) => a.id === item.agentId)
     return agent ? [{ ...item, agent }] : []
