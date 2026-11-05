@@ -12,11 +12,11 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone } = await import('./agents')
+const { agentsKey, asTheyAre, createAgent, revealAgent, rosterQuery, saysGone, toAgent, visibleAgents } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
 
-const agent = (id: string, more: Partial<Agent> = {}): Agent => ({ id, name: id, hue: 0, role: '', isDefault: false, ...more })
+const agent = (id: string, more: Partial<Agent> = {}): Agent => ({ id, name: id, hue: 0, role: '', isDefault: false, hidden: false, ...more })
 
 /** The roster as it was when the sheet opened: Hermes and Zed. */
 function roster() {
@@ -183,5 +183,33 @@ describe('the roster kept on this device', () => {
     qc.setQueryData<Agent[]>(agentsKey, (list) => list?.map((a) => (a.id === 'zed' ? { ...a, name: 'Zed 2' } : a)))
     expect(observer.getCurrentResult().data?.map((a) => a.name)).toEqual(['Hermes', 'Zed 2'])
     off()
+  })
+})
+
+describe('hidden agents', () => {
+  const flagged = (hidden: unknown) => toAgent({ name: 'zed', is_default: false, ui_meta: { 'hermes-bots': { hidden } } }, {}, {})
+
+  it('are the ones flagged in the hermes-bots record, and no others', () => {
+    expect(flagged(true).hidden).toBe(true)
+    for (const v of [false, 'true', 1, null, undefined]) expect(flagged(v).hidden).toBe(false)
+    expect(toAgent({ name: 'zed', is_default: false }, {}, {}).hidden).toBe(false)
+  })
+
+  it('are left out of the lists, the rest keeping their order', () => {
+    const all = [agent('a'), agent('b', { hidden: true }), agent('c')]
+    expect(visibleAgents(all).map((a) => a.id)).toEqual(['a', 'c'])
+    expect(visibleAgents([agent('b', { hidden: true })])).toEqual([])
+  })
+
+  it('stay in the roster itself, so chats, groups and mentions still find them', async () => {
+    listProfiles.mockResolvedValue([
+      { name: 'default', is_default: true },
+      { name: 'zed', is_default: false, ui_meta: { 'hermes-bots': { hidden: true } } },
+    ])
+    const data = await new QueryClient().fetchQuery({ ...rosterQuery, staleTime: 0 })
+    expect(data.map((a) => [a.id, a.hidden])).toEqual([
+      ['default', false],
+      ['zed', true],
+    ])
   })
 })

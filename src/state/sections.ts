@@ -1,7 +1,7 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { create } from 'zustand'
 import { scoped } from '@/hermes/instance'
-import { agentsKey, useAgents, type Agent } from '@/state/agents'
+import { agentsKey, useAgents, visibleAgents, type Agent } from '@/state/agents'
 import { agentsIn, settle, writeRecord } from '@/state/records'
 
 // Sections: shelves you file agents (and groups) on, so a long roster reads by
@@ -73,9 +73,17 @@ export function sectionsOf(agents: Agent[] | undefined): Section[] {
   return list
 }
 
+/** The sections to show: one whose agents are all hidden has nothing to list (an empty one you made stays). */
+export function shownSections(agents: Agent[] | undefined): Section[] {
+  const on = (list: Agent[] = []) => new Set(list.map(sectionOf))
+  const all = on(agents)
+  const seen = on(agents && visibleAgents(agents))
+  return sectionsOf(agents).filter((s) => seen.has(s.id) || !all.has(s.id) || s.groups?.length)
+}
+
 export function useSections() {
   const { data: agents } = useAgents()
-  return sectionsOf(agents)
+  return shownSections(agents)
 }
 
 const newId = () => `sec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`

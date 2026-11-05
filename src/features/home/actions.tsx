@@ -20,6 +20,7 @@ import {
   revealAgent,
   updateAgent,
   useAgents,
+  visibleAgents,
   type Agent,
 } from '@/state/agents'
 import { deleteGroup, renameGroup } from '@/state/groups'
@@ -312,7 +313,7 @@ export function useAgentActions() {
       <NewGroupSheet
         open={grouping}
         onOpenChange={setGrouping}
-        agents={agents}
+        agents={visibleAgents(agents)}
         onCreate={makeGroup}
         submitting={busy}
       />

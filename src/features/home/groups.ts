@@ -1,6 +1,6 @@
 // Groups as roster rows, from the groups store (state/groups).
 
-import { useAgents } from '@/state/agents'
+import { useVisibleAgents } from '@/state/agents'
 import { createGroup as create, useGroupSummaries, useGroupsAvailable } from '@/state/groups'
 
 export type GroupRow = {
@@ -35,7 +35,7 @@ export function useGroupRows(): GroupRow[] {
 /** Whether "New group" makes sense here: Hermes can host groups, and there are two agents to put in one. */
 export function useCanMakeGroups() {
   const available = useGroupsAvailable()
-  const { data: agents } = useAgents()
+  const { data: agents } = useVisibleAgents()
   return available && (agents?.length ?? 0) >= 2
 }
 

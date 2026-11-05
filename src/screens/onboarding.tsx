@@ -200,7 +200,7 @@ function AgentStep({ onDone, onSkip }: { onDone: (name: string) => void; onSkip:
  * profile keeps its id, "default"; Hermes isn't asked to rename it.
  */
 async function personalize(main: Agent | undefined, d: AgentDraft) {
-  const agent: Agent = main ?? { id: 'default', name: 'Hermes', hue: 278, role: '', isDefault: true }
+  const agent: Agent = main ?? { id: 'default', name: 'Hermes', hue: 278, role: '', isDefault: true, hidden: false }
   // Starting from scratch leaves no template behind.
   const { template: _, ...murmurMeta } = agent.murmurMeta ?? {}
   await updateAgent(

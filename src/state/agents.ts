@@ -8,7 +8,7 @@
 
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from '@/hermes/rest'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { gateway, rpc } from '@/hermes/gateway'
 import { ensureAgentTimezone } from '@/state/timezone'
 import { forgetInheritedMail } from '@/state/mail'
@@ -69,6 +69,8 @@ export type Agent = {
   hue: number
   role: string
   isDefault: boolean
+  /** Flagged in ui_meta['hermes-bots'].hidden: kept out of the lists, still an agent everywhere else. */
+  hidden: boolean
   model?: string
   provider?: string
   /**
@@ -197,6 +199,7 @@ export function toAgent(p: Profile, hues = storedHues(), pending = pendingLooks(
     hue: (typeof murmur?.hue === 'number' ? murmur.hue : undefined) ?? hexHue(bots?.color) ?? hues[p.name] ?? (p.is_default ? 278 : hueFor(p.name)),
     role,
     isDefault: p.is_default,
+    hidden: bots?.hidden === true,
     model: p.model ?? undefined,
     provider: p.provider ?? undefined,
     lastChat: newestChat(p),
@@ -365,6 +368,15 @@ export const rosterQuery = {
 
 export function useAgents() {
   return useQuery(rosterQuery)
+}
+
+export const visibleAgents = (agents: Agent[]) => agents.filter((a) => !a.hidden)
+
+/** The roster for lists to browse; lookups (chats, groups, mentions) use useAgents, which keeps hidden agents. */
+export function useVisibleAgents() {
+  const roster = useAgents()
+  const data = useMemo(() => roster.data && visibleAgents(roster.data), [roster.data])
+  return { ...roster, data }
 }
 
 type Roster = { isSuccess: boolean; dataUpdatedAt: number; data: Agent[] | undefined }

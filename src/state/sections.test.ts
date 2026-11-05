@@ -15,11 +15,11 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn() }))
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn() }))
 vi.mock('./agents', async () => {
   // The roster's own reading of a profile, so an agent read again lands as the roster has it.
-  const { agentsKey, toAgent, readAgent, writeMeta } = await vi.importActual<typeof import('./agents')>('./agents')
-  return { agentsKey, toAgent, readAgent, writeMeta, useAgents: vi.fn() }
+  const { agentsKey, toAgent, readAgent, writeMeta, visibleAgents } = await vi.importActual<typeof import('./agents')>('./agents')
+  return { agentsKey, toAgent, readAgent, writeMeta, visibleAgents, useAgents: vi.fn() }
 })
 
-const { createSection, deleteSection, editSection, file, moveSection, sectionOf, sectionsOf, useSectionWrites } =
+const { createSection, deleteSection, editSection, file, moveSection, sectionOf, sectionsOf, shownSections, useSectionWrites } =
   await import('./sections')
 const { agentsKey } = await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
@@ -47,6 +47,7 @@ const agent = (id: string, more: Partial<Agent> = {}): Agent => ({
   hue: 0,
   role: '',
   isDefault: false,
+  hidden: false,
   ...more,
 })
 /** The main agent, holding Murmur's list. */
@@ -189,6 +190,27 @@ describe('the list of sections', () => {
       agent('pip', { botMeta: { sectionId: 'z', sectionName: 5 } }),
     ]
     expect(sectionsOf(agents)).toEqual([])
+  })
+
+  it('shows no section whose agents are all hidden, but keeps an empty one you made and one with a group', () => {
+    const bare: Section = { id: 'bare', name: 'Bare', groups: [] }
+    const shelf: Section = { id: 'shelf', name: 'Shelf', groups: ['g3'] }
+    const made: Section = { id: 'made', name: 'Made', groups: [] }
+    const agents = [
+      mainAgent([bare, side, shelf, made]),
+      agent('nova', { hidden: true, botMeta: at(bare) }),
+      agent('echo', { hidden: true, botMeta: at(shelf) }),
+      agent('pip', { hidden: true, botMeta: { sectionId: 'desk', sectionName: 'Desk' } }),
+      agent('zed', { botMeta: at(side) }),
+    ]
+    expect(shownSections(agents).map((s) => s.id)).toEqual(['side', 'shelf', 'made'])
+    expect(shownSections([...agents, agent('ada', { botMeta: at(bare) })]).map((s) => s.id)).toEqual([
+      'bare',
+      'side',
+      'shelf',
+      'made',
+    ])
+    expect(shownSections(undefined)).toEqual([])
   })
 
   it('is empty before the roster has loaded', () => {

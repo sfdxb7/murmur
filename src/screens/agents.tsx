@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { IconButton } from '@/ui/button'
 import { Skeleton } from '@/ui/skeleton'
 import { useIsWide } from '@/lib/use-media'
-import { useAgents, type Agent } from '@/state/agents'
+import { useVisibleAgents, type Agent } from '@/state/agents'
 import { useBusyAgents } from '@/state/status'
 import { sectionOf, useSections } from '@/state/sections'
 import { useAgentActions } from '@/features/home/actions'
@@ -24,7 +24,7 @@ const grid = 'grid grid-cols-2 gap-3 min-[600px]:grid-cols-3 md:grid-cols-[repea
 let greeted = false
 
 export function AgentsScreen() {
-  const { data: agents, isPending } = useAgents()
+  const { data: agents, isPending } = useVisibleAgents()
   const busy = useBusyAgents()
   const wide = useIsWide()
   const actions = useAgentActions()
