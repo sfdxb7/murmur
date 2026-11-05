@@ -271,37 +271,72 @@ describe('hiding an agent', () => {
 
 describe('opening the chats of an agent', () => {
   const row = (id: string, more: object = {}) => ({ id, title: id, message_count: 2, started_at: 1, source: 'tui', ...more })
+  const bot = (more: object = {}) => row('m', { title: 'Bot Chat', ...more })
+  type P = { title?: string; include_hidden?: boolean }
   const lists = (shown: object[], all: object[], main: object[] = []) =>
-    rpc.mockImplementation(async (_m: string, p: { title?: string; include_hidden?: boolean }) => ({
-      sessions: p.title ? main : p.include_hidden ? all : shown,
-    }))
-  const calls = () => rpc.mock.calls.map((c) => [c[0], c[1]])
+    rpc.mockImplementation(async (_m: string, p: P) => ({ sessions: p.title ? main : p.include_hidden ? all : shown }))
+  const ids = async () => (await fetchAgentChats('zed')).map((c) => c.id)
 
-  it('with the main chat inside the window, lists twice and skips the title lookup', async () => {
-    const bot = row('m', { title: 'Bot Chat' })
-    lists([row('a'), row('b')], [row('a'), bot, row('b')])
-    const out = await fetchAgentChats('zed')
-    expect(calls()).toEqual([
-      ['session.list', { profile: 'zed', limit: 60 }],
-      ['session.list', { profile: 'zed', limit: 60, include_hidden: true }],
-    ])
-    expect(out.map((c) => c.id)).toEqual(['a', 'm', 'b'])
-    expect(out[1].main).toBe(true)
-  })
-
-  it('with the main chat older than the window, looks it up by title and puts it last', async () => {
-    lists([row('a'), row('b')], [row('a'), row('b')], [row('m', { title: 'Bot Chat' })])
-    const out = await fetchAgentChats('zed')
-    expect(calls()).toEqual([
+  it('makes exactly three session.list calls with these params', async () => {
+    lists([row('a')], [row('a')])
+    await fetchAgentChats('zed')
+    expect(rpc.mock.calls.map((c) => [c[0], c[1]])).toEqual([
       ['session.list', { profile: 'zed', limit: 60 }],
       ['session.list', { profile: 'zed', limit: 60, include_hidden: true }],
       ['session.list', { profile: 'zed', title: 'Bot Chat', include_hidden: true }],
     ])
-    expect(out.map((c) => c.id)).toEqual(['a', 'b', 'm'])
+  })
+
+  it('puts the main chat first when it is newer than everything', async () => {
+    lists([row('a'), row('b')], [bot(), row('a'), row('b')], [bot()])
+    expect(await ids()).toEqual(['m', 'a', 'b'])
+  })
+
+  it('puts it in the middle where activity order says', async () => {
+    lists([row('a'), row('b')], [row('a'), bot(), row('b')], [bot()])
+    const out = await fetchAgentChats('zed')
+    expect(out.map((c) => c.id)).toEqual(['a', 'm', 'b'])
+    expect(out[1]).toMatchObject({ main: true, title: 'Main chat' })
+  })
+
+  it('puts it last when it is older than the window', async () => {
+    lists([row('a'), row('b')], [row('a'), row('b')], [bot()])
+    expect(await ids()).toEqual(['a', 'b', 'm'])
   })
 
   it('keeps other hidden chats out', async () => {
     lists([row('a')], [row('a'), row('h')])
-    expect((await fetchAgentChats('zed')).map((c) => c.id)).toEqual(['a'])
+    expect(await ids()).toEqual(['a'])
+  })
+
+  it('uses resolved_id for the main chat and does not list it twice', async () => {
+    lists([row('a'), row('r')], [row('a'), bot({ id: 'old', resolved_id: 'r' })], [bot({ id: 'old', resolved_id: 'r' })])
+    const out = await fetchAgentChats('zed')
+    expect(out.map((c) => c.id)).toEqual(['a', 'r'])
+    expect(out[1].main).toBe(true)
+  })
+
+  it('when the include_hidden call fails, still finds the main chat and puts it last', async () => {
+    rpc.mockImplementation(async (_m: string, p: P) => {
+      if (p.include_hidden && !p.title) throw new Error('boom')
+      return { sessions: p.title ? [bot()] : [row('a')] }
+    })
+    expect(await ids()).toEqual(['a', 'm'])
+  })
+
+  it('when the title lookup fails, lists the chats without a main one', async () => {
+    rpc.mockImplementation(async (_m: string, p: P) => {
+      if (p.title) throw new Error('boom')
+      return { sessions: [row('a')] }
+    })
+    expect(await ids()).toEqual(['a'])
+  })
+
+  it('when the plain listing fails, fails', async () => {
+    rpc.mockImplementation(async (_m: string, p: P) => {
+      if (!p.include_hidden) throw new Error('boom')
+      return { sessions: [] }
+    })
+    await expect(fetchAgentChats('zed')).rejects.toThrow('boom')
   })
 })
