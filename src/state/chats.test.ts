@@ -16,7 +16,7 @@ vi.mock('@/hermes/gateway', () => ({
 vi.stubGlobal('document', { cookie: '', addEventListener: () => {}, visibilityState: 'visible' })
 vi.stubGlobal('window', { addEventListener: () => {}, setTimeout })
 
-const { getChat, openChat, wireChats } = await import('./chats')
+const { getChat, loadOlder, openChat, wireChats } = await import('./chats')
 
 const HANDOFF =
   '[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below.\n\n## Goal\nA trip'
@@ -148,5 +148,33 @@ describe('Hermes summarizing a chat as you watch', () => {
     await openChat('other', 'default')
     emit('status.update', { kind: 'process', text: 'Resuming interrupted turn…' })
     expect(getChat('other')!.items.some((i) => i.kind === 'compaction')).toBe(false)
+  })
+})
+
+describe('a long chat', () => {
+  const page = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => row(from + i, 'user', `message ${from + i}`))
+
+  it('opens on a small page, and scrolling back reads on from it without repeats', async () => {
+    get.mockReset()
+    get.mockImplementation(async (path: string) => {
+      if (!path.includes('/long/messages')) return { messages: [] }
+      return { messages: path.includes('offset=150') ? page(1, 40) : page(41, 190) }
+    })
+    await openChat('long', 'default')
+    const reads = () => get.mock.calls.map(([path]) => path as string).filter((path) => path.includes('/long/messages'))
+    expect(reads()[0]).toContain('limit=150')
+    expect(getChat('long')!.older).toBe(true)
+    expect(getChat('long')!.items).toHaveLength(150)
+
+    await loadOlder('long')
+    expect(reads().at(-1)).toContain('limit=500')
+    expect(reads().at(-1)).toContain('offset=150')
+    const items = getChat('long')!.items
+    expect(items).toHaveLength(190)
+    expect(new Set(items.map((i) => i.id)).size).toBe(190)
+    expect(said(items).slice(0, 1)).toEqual(['user: message 1'])
+    // That page wasn't full, so there's nothing further back.
+    expect(getChat('long')!.older).toBe(false)
   })
 })

@@ -327,15 +327,17 @@ function rowsToItems(rows: Row[], speaker?: Speaker, errands: Map<string, Errand
 
 /** The most rows Hermes sends at once. A page that full may have older rows behind it. */
 const PAGE = 500
+/** What opening a chat reads: enough to fill the screen and scroll a while, not a long chat's whole last page. */
+const FIRST_PAGE = 150
 
 /**
  * A chat's saved rows, oldest first: its newest page, or the one `offset`
  * rows back from its end. Every message, including the ones Hermes has
  * since summarized for the model (its own clients read them the same way).
  */
-async function readRows(id: string, profile: string, offset = 0) {
+async function readRows(id: string, profile: string, offset = 0, limit = PAGE) {
   type Res = { messages?: Row[]; data?: Row[] }
-  const query = `profile=${encodeURIComponent(profile)}&order=latest&limit=${PAGE}&include_compacted=true`
+  const query = `profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}&include_compacted=true`
   const res = await api.get<Res>(
     `/api/sessions/${encodeURIComponent(id)}/messages?${query}${offset ? `&offset=${offset}` : ''}`,
   )
@@ -500,7 +502,7 @@ async function readHistory(id: string, profile: string, speaker?: Speaker) {
   for (let tries = 0; ; tries++) {
     let rows: Row[]
     try {
-      rows = await readRows(id, profile)
+      rows = await readRows(id, profile, 0, FIRST_PAGE)
     } catch (e) {
       if (!(e instanceof HermesError && e.status === 404)) {
         // A few seconds of trying, then it says so.
@@ -520,7 +522,7 @@ async function readHistory(id: string, profile: string, speaker?: Speaker) {
       items: [...items, ...c.items.filter((i) => rowOf(i) == null || !saved.has(rowOf(i)))],
       ready: true,
       stalled: undefined,
-      older: rows.length >= PAGE,
+      older: rows.length >= FIRST_PAGE,
     }))
     return true
   }
