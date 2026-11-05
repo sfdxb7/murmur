@@ -4,8 +4,8 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { api } from '@/hermes/rest'
-import { dropKeptChat, keepChats, keptChats, toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type SessionRow } from '@/state/agents'
-import { standIn } from './stand-in'
+import { dropKeptChat, keepChats, keptChats, toSummary, useAgentChats, useAgents, type Agent, type ChatSummary, type KeptChat, type SessionRow } from '@/state/agents'
+import { standIn, toKeep } from './stand-in'
 import { replaceGone } from '@/lib/transitions'
 import { routineRunsKey, useContinuedRuns, useRoutineNews, type RoutineRun } from '@/state/routines'
 import { deleteChat, updateChat, useChats, type ChatChange } from '@/state/chats'
@@ -169,7 +169,7 @@ export function useAgentChatList(of: Agent | string | undefined, { results = tru
   const rest = !activity.isPending && !waiting && !runs.isPending ? 'settled' : 'waiting'
   const settled = conversations.dataUpdatedAt > 0 && rest === 'settled'
   useEffect(() => {
-    if (results && settled && data && agentId) keepChats(agentId, data)
+    if (settled && data && agentId) keepChats(agentId, toKeep<KeptChat>(data, results, keptChats(agentId)))
   }, [results, settled, data, agentId])
   const early = standIn({
     kept,

@@ -22,3 +22,13 @@ export function standIn({ kept, hidden, opened, chats, rest }: StandIn) {
   if (opened.some((id) => !kept.some((c) => c.id === id) && !hidden.has(id))) return undefined
   return kept.filter((c) => !hidden.has(c.id))
 }
+
+/**
+ * What to store of a list just shown. The agent's page leaves routines' results
+ * out, as it shows them with the routines, so the ones already stored stay for
+ * the lists that do show them.
+ */
+export function toKeep<C extends { at: number; result?: boolean }>(shown: C[], withResults: boolean, stored: C[] | undefined) {
+  if (withResults) return shown
+  return [...shown, ...(stored ?? []).filter((c) => c.result)].sort((a, b) => b.at - a.at)
+}

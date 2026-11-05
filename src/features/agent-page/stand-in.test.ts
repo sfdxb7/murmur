@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { standIn, type StandIn } from './stand-in'
+import { standIn, toKeep, type StandIn } from './stand-in'
 import type { AgentChat } from './chats'
 
 const chat = (id: string): AgentChat => ({ id, title: id, preview: '', startedAt: 0, messageCount: 0, source: '', at: 1 })
@@ -40,5 +40,23 @@ describe('the stored chat list standing in for the fresh one', () => {
   it('steps aside for a chat the list does not know, as one made meanwhile', () => {
     expect(ids({ ...base, opened: ['a', 'new'] })).toBeUndefined()
     expect(ids({ ...base, opened: ['a'] })).toEqual(['a', 'b'])
+  })
+})
+
+describe('what gets stored of a list just shown', () => {
+  const chat = { id: 'c', at: 2 }
+  const result = { id: 'r', at: 3, result: true }
+  const old = { id: 'o', at: 1 }
+
+  it('stores a list with results as it is', () => {
+    expect(toKeep([chat], true, [result, old])).toEqual([chat])
+  })
+
+  it('keeps stored results from a list without them, in order, and drops stale chats', () => {
+    expect(toKeep([chat], false, [result, old])).toEqual([result, chat])
+  })
+
+  it('stores a first list without results when nothing is stored yet', () => {
+    expect(toKeep([chat], false, undefined)).toEqual([chat])
   })
 })
