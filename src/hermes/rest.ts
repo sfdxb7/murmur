@@ -3,6 +3,7 @@
 
 import { redialNow } from './gateway'
 import { HERMES_GONE, HERMES_HEADER, tabHermes } from './instance'
+import { takeTurn } from './turns'
 
 export class HermesError extends Error {
   status: number
@@ -24,6 +25,15 @@ export function hermesHeaders(headers: Record<string, string> = {}): Record<stri
 }
 
 async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const done = await takeTurn(method, path, init)
+  try {
+    return await send<T>(method, path, body, init)
+  } finally {
+    done()
+  }
+}
+
+async function send<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(`/hermes${path}`, {

@@ -361,6 +361,7 @@ export async function fetchRunResult(agentId: string, runId: string): Promise<Ru
   type Row = { id?: number; timestamp?: number; role?: string; content?: string | null }
   const res = await api.get<{ messages?: Row[] }>(
     `/api/sessions/${encodeURIComponent(runId)}/messages?${p(agentId)}&order=latest&limit=20`,
+    { priority: 'low' },
   )
   const rows = (res.messages ?? []).sort((a, b) => (a.timestamp ?? a.id ?? 0) - (b.timestamp ?? b.id ?? 0))
   const said = rows.filter((r) => r.role === 'assistant' && r.content?.trim())
