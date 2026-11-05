@@ -503,6 +503,8 @@ async function readHistory(id: string, profile: string, speaker?: Speaker) {
     let rows: Row[]
     try {
       rows = await readRows(id, profile, 0, FIRST_PAGE)
+      // One long turn can fill the page: undo and edit need the message that started it.
+      if (rows.length >= FIRST_PAGE && !rows.some((r) => r.role === 'user')) rows = await readRows(id, profile)
     } catch (e) {
       if (!(e instanceof HermesError && e.status === 404)) {
         // A few seconds of trying, then it says so.

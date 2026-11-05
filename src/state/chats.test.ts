@@ -177,4 +177,17 @@ describe('a long chat', () => {
     // That page wasn't full, so there's nothing further back.
     expect(getChat('long')!.older).toBe(false)
   })
+
+  it('reads the full page when one long turn fills the small one', async () => {
+    get.mockReset()
+    const steps = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => row(from + i, 'assistant', `step ${from + i}`))
+    get.mockImplementation(async (path: string) => {
+      if (!path.includes('/one-turn/messages')) return { messages: [] }
+      return { messages: path.includes('limit=150') ? steps(51, 200) : [row(1, 'user', 'Do it all'), ...steps(2, 200)] }
+    })
+    await openChat('one-turn', 'default')
+    const items = getChat('one-turn')!.items
+    expect(said(items)[0]).toBe('user: Do it all')
+  })
 })
