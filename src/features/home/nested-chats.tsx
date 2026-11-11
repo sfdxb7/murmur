@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn'
 import { useAgentChatList, useChatActions, useUnread, type AgentChat } from '@/features/agent-page/chats'
 import { chatOptions } from '@/features/agent-page/chat-list'
 import { RenameChatSheet } from '@/features/agent-page/rename-chat'
+import { useHideAgentItem, withHideAgent } from './hide'
 import { RowMenu, useLongPress } from './row-menu'
 
 // An agent's pinned and latest chats, tucked under its row in the sidebar,
@@ -213,7 +214,17 @@ function ChatItem({
   const unread = useUnread(chat)
   const [open, setOpen] = useState(false)
   const press = useLongPress(() => setOpen(true))
-  const has = menu.length > 0
+  const hide = useHideAgentItem(agent)
+  const items = withHideAgent(
+    menu.map((o) => ({
+      label: o.label,
+      icon: <o.icon size={18} strokeWidth={1.85} />,
+      onSelect: o.run,
+      danger: o.danger,
+    })),
+    hide,
+  )
+  const has = items.length > 0
   const item = (
     <Item
       href={`/chat/${agent.id}/${chat.id}`}
@@ -274,18 +285,7 @@ function ChatItem({
           </button>
         </div>
       </Popover.Anchor>
-      <RowMenu
-        open={open}
-        name={chat.title}
-        roomy={false}
-        close={() => setOpen(false)}
-        items={menu.map((o) => ({
-          label: o.label,
-          icon: <o.icon size={18} strokeWidth={1.85} />,
-          onSelect: o.run,
-          danger: o.danger,
-        }))}
-      />
+      <RowMenu open={open} name={chat.title} roomy={false} close={() => setOpen(false)} items={items} />
     </Popover.Root>
   )
 }

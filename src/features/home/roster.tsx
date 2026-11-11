@@ -22,7 +22,7 @@ import {
 import { Orb, OrbStack } from '@/ui/orb'
 import { Buddy, BuddyStack } from '@/ui/buddy'
 import { Button } from '@/ui/button'
-import { fetchAgentChats, useAgentChats, useAgents, type Agent } from '@/state/agents'
+import { fetchAgentChats, useAgentChats, useAgents, useVisibleAgents, type Agent } from '@/state/agents'
 import { settledAt, useAgentStatus, useBusyAgents, useChatUnread, useNeedsYou, useUnreadCount } from '@/state/status'
 import { sectionOf, setFolded, useFoldedMap, type Section } from '@/state/sections'
 import { newGroupChat, prefetchGroup, useGroupSummaries } from '@/state/groups'
@@ -33,6 +33,7 @@ import { cn } from '@/lib/cn'
 import { useGroupRows, type GroupRow } from './groups'
 import { shortTime } from './time'
 import { Bone } from './bone'
+import { useHideAgentItem, withHideAgent } from './hide'
 import { RowMenu, useLongPress, type MenuItem } from './row-menu'
 import type { SectionActions } from './actions'
 import { setExpanded, useExpanded } from './expanded'
@@ -73,7 +74,8 @@ export function Roster({
   onDeleteGroup,
   sections: shelves,
 }: RosterProps) {
-  const { data: agents, isPending, isError, refetch, isRefetching } = useAgents()
+  const { data: agents, isPending, isError, refetch, isRefetching } = useVisibleAgents()
+  const anyone = (useAgents().data?.length ?? 0) > 0
   const groups = useGroupRows()
   const groupsLoaded = !useGroupSummaries().isPending
   const busy = useBusyAgents()
@@ -229,6 +231,19 @@ export function Roster({
         ],
       },
     }
+  }
+
+  if (!agents.length && !groups.length && anyone) {
+    return (
+      <p
+        className={cn(
+          'text-balance text-ink-2',
+          density === 'roomy' ? 'px-5 pt-2 text-subhead' : 'px-4 pt-2 text-footnote',
+        )}
+      >
+        Every agent is hidden. Unhide one in Settings.
+      </p>
+    )
   }
 
   return (
@@ -480,6 +495,7 @@ function AgentRow({
 }) {
   const status = useAgentStatus(agent.id)
   const [menu, setMenu] = useState(false)
+  const hide = useHideAgentItem(agent)
   const press = useLongPress(() => setMenu(true))
   const [halo] = useState(fresh)
   const roomy = density === 'roomy'
@@ -577,13 +593,16 @@ function AgentRow({
         name={agent.name}
         roomy={roomy}
         close={() => setMenu(false)}
-        items={[
-          { label: 'Edit', icon: <Pencil size={18} strokeWidth={1.85} />, onSelect: onEdit },
-          ...(move ? [move] : []),
-          ...(onDelete
-            ? [{ label: 'Delete', icon: <Trash2 size={18} strokeWidth={1.85} />, onSelect: onDelete, danger: true }]
-            : []),
-        ]}
+        items={withHideAgent(
+          [
+            { label: 'Edit', icon: <Pencil size={18} strokeWidth={1.85} />, onSelect: onEdit },
+            ...(move ? [move] : []),
+            ...(onDelete
+              ? [{ label: 'Delete', icon: <Trash2 size={18} strokeWidth={1.85} />, onSelect: onDelete, danger: true }]
+              : []),
+          ],
+          hide,
+        )}
       />
     </Popover.Root>
   )

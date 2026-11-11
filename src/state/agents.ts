@@ -3,12 +3,13 @@
 //
 // What Murmur adds on top lives where Hermes Desktop's Bot Mode keeps it, so
 // both apps see the same agent: the name and colour in the profile's
-// ui_meta['hermes-bots'] ({title, color}), the exact hue in ui_meta.murmur,
+// ui_meta['hermes-bots'] ({title, color}, and hidden when Murmur has tucked
+// it away), the exact hue in ui_meta.murmur,
 // the role in the profile description, the personality in SOUL.md.
 
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from '@/hermes/rest'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { gateway, rpc } from '@/hermes/gateway'
 import { ensureAgentTimezone } from '@/state/timezone'
 import { forgetInheritedMail } from '@/state/mail'
@@ -89,7 +90,10 @@ export type Agent = {
   }
   /** When the main chat last moved (Hermes hides it from the lists that say so). */
   mainChatAt?: number
-  /** Bot Mode's presentation record, kept so edits merge instead of clobbering. */
+  /**
+   * Bot Mode's presentation record, kept so edits merge instead of clobbering.
+   * `hidden: true` keeps the agent off Murmur's lists (features/home/hide.tsx).
+   */
   botMeta?: Record<string, unknown>
   /** The template it was made from (ui_meta.murmur.template), for its chat starters. */
   template?: string
@@ -386,6 +390,18 @@ export const rosterQuery = {
 
 export function useAgents() {
   return useQuery(rosterQuery)
+}
+
+/** Tucked off the lists: Hermes keeps `hidden: true` on the agent's hermes-bots record. */
+export const agentHidden = (agent: Agent) => agent.botMeta?.hidden === true
+
+/** The roster people browse. Lookups (an open chat, a mention, needs-you) keep the hidden ones. */
+export const visibleAgents = (agents: Agent[]) => agents.filter((agent) => !agentHidden(agent))
+
+export function useVisibleAgents() {
+  const roster = useAgents()
+  const data = useMemo(() => (roster.data ? visibleAgents(roster.data) : undefined), [roster.data])
+  return { ...roster, data }
 }
 
 type Roster = { isSuccess: boolean; dataUpdatedAt: number; data: Agent[] | undefined }
