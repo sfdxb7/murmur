@@ -4,7 +4,7 @@ import { Link } from 'wouter'
 import { ChevronRight } from 'lucide-react'
 import { Orb } from '@/ui/orb'
 import { cn } from '@/lib/cn'
-import { useAgents, type Agent } from '@/state/agents'
+import { useVisibleAgents, type Agent } from '@/state/agents'
 import { useGroupSummaries } from '@/state/groups'
 import { useAgentStatus } from '@/state/status'
 import { ChatList } from '@/features/agent-page/chat-list'
@@ -18,7 +18,7 @@ import { noteArrivals } from './roster'
 
 /** The only agent, while there's just one and no groups. */
 export function useSoloAgent(): Agent | undefined {
-  const agents = useAgents().data
+  const agents = useVisibleAgents().data
   const groups = useGroupSummaries()
   const solo = agents?.length === 1 && !groups.data?.length ? agents[0] : undefined
   // Keep the roster's arrivals current while it's away, so whoever ends the

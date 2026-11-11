@@ -21,6 +21,7 @@ import { useMedia } from '@/lib/use-media'
 import { sourceLabel, type Agent } from '@/state/agents'
 import { SearchField } from '@/features/search/search-field'
 import { shortTime } from '@/features/home/time'
+import { useHideAgentItem, withHideAgent } from '@/features/home/hide'
 import { RowMenu, useLongPress, type MenuPlace } from '@/features/home/row-menu'
 import { useArchivedChats, useChatActions, useUnread, type AgentChat, type ChatActions } from './chats'
 import { RenameChatSheet } from './rename-chat'
@@ -264,6 +265,16 @@ function ChatRow({
   onOpen?: () => void
 }) {
   const { menu, leading, trailing } = options
+  const hide = useHideAgentItem(agent)
+  const items = withHideAgent(
+    menu.map((o) => ({
+      label: o.label,
+      icon: <o.icon size={18} strokeWidth={1.85} />,
+      onSelect: o.run,
+      danger: o.danger,
+    })),
+    hide,
+  )
   const [open, setOpen] = useState(false)
   // Hung under the row from a hold, under the "…" from it, at the pointer from a right-click.
   const [place, setPlace] = useState<MenuPlace>('row')
@@ -283,13 +294,6 @@ function ChatRow({
   const via = !chat.routine && sourceLabel(chat.source)
   const unread = useUnread(chat)
   const { row, x, armed, dragged, run, drag } = useSwipe<HTMLLIElement>({ leading, trailing, revealed, onReveal })
-
-  const items = menu.map((o) => ({
-    label: o.label,
-    icon: <o.icon size={18} strokeWidth={1.85} />,
-    onSelect: o.run,
-    danger: o.danger,
-  }))
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen} modal>
@@ -346,13 +350,13 @@ function ChatRow({
           <Link
             href={`/chat/${agent.id}/${chat.id}`}
             draggable={false}
-            {...(menu.length ? press : {})}
+            {...(items.length ? press : {})}
             onPointerDown={(e) => {
               dragged.current = false
-              if (menu.length) press.onPointerDown(e)
+              if (items.length) press.onPointerDown(e)
             }}
             onClick={(e) => {
-              if (menu.length) press.onClick(e)
+              if (items.length) press.onClick(e)
               // A swipe, or a tap on a row showing its action, never opens the chat.
               if (dragged.current || revealed) {
                 e.preventDefault()
@@ -364,11 +368,11 @@ function ChatRow({
             className={cn(
               'relative flex min-w-0 flex-1 items-center gap-3 text-left select-none [-webkit-touch-callout:none] focus-visible:-outline-offset-2',
               plain ? 'min-h-14 py-3 pr-5 pl-5' : 'min-h-15 py-2.5 pr-4 pl-4',
-              !plain && menu.length > 0 && '[@media(hover:hover)]:pr-2',
+              !plain && items.length > 0 && '[@media(hover:hover)]:pr-2',
             )}
           >
             {plain ? (
-              <PlainLine chat={chat} unread={unread} via={via} more={menu.length > 0} />
+              <PlainLine chat={chat} unread={unread} via={via} more={items.length > 0} />
             ) : (
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
@@ -396,7 +400,7 @@ function ChatRow({
               </span>
             )}
           </Link>
-          {menu.length > 0 && (
+          {items.length > 0 && (
             <button
               type="button"
               onClick={(e) => openMenu(e.currentTarget)}
@@ -414,7 +418,7 @@ function ChatRow({
           )}
         </motion.div>
       </motion.li>
-      {menu.length > 0 && (
+      {items.length > 0 && (
         <RowMenu open={open} name={chat.title} roomy place={place} close={() => setOpen(false)} items={items} />
       )}
     </Popover.Root>
