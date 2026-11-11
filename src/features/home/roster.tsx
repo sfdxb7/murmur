@@ -36,7 +36,7 @@ import { Bone } from './bone'
 import { useHideAgentItem, withHideAgent } from './hide'
 import { RowMenu, useLongPress, type MenuItem } from './row-menu'
 import type { SectionActions } from './actions'
-import { setExpanded, useExpanded } from './expanded'
+import { releaseExpanded, setExpanded, useExpanded } from './expanded'
 import { NestedChats, useShowsChat } from './nested-chats'
 import { NestedGroupChats } from './nested-group-chats'
 
@@ -295,11 +295,17 @@ export function Roster({
                 // The row being carried stays behind as a ghost of itself.
                 className={cn('transition-opacity duration-150', dragging === entry.key && 'opacity-35')}
                 {...(draggable && {
+                  // The row is the drag source. Its link stays undraggable, so a small
+                  // pointer move on macOS doesn't turn the click into a URL drag.
+                  draggable: entry.kind === 'agent' || entry.kind === 'group',
                   onDragStart: (e: React.DragEvent) => {
                     if (entry.kind !== 'agent' && entry.kind !== 'group') return
-                    // The row itself, not a chat listed under it (that's a link of its own to drag).
+                    // The row itself, not a chat listed under it (that's a link of its own).
                     const row = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-nav]')
-                    if (!row?.contains(e.target as Node)) return
+                    if (!row?.contains(e.target as Node)) {
+                      e.preventDefault()
+                      return
+                    }
                     e.dataTransfer.setData(DRAG_TYPE, entry.key)
                     e.dataTransfer.effectAllowed = 'move'
                     e.dataTransfer.setDragImage(row, 32, row.offsetHeight / 2)
@@ -569,6 +575,7 @@ function AgentRow({
                     open: expanded,
                     controls: chatsId,
                     onToggle: () => setExpanded(agent.id, !expanded),
+                    onArrive: () => releaseExpanded(agent.id),
                     onWarm: warm,
                   }
             }
@@ -670,7 +677,12 @@ function GroupRowView({
             label={unread ? `${group.name}, new messages` : undefined}
             disclosure={
               several
-                ? { open: expanded, controls: chatsId, onToggle: () => setExpanded(`group:${group.id}`, !expanded) }
+                ? {
+                    open: expanded,
+                    controls: chatsId,
+                    onToggle: () => setExpanded(`group:${group.id}`, !expanded),
+                    onArrive: () => releaseExpanded(`group:${group.id}`),
+                  }
                 : undefined
             }
             face={
@@ -948,7 +960,14 @@ const clearsMore = (roomy: boolean, line: 'name' | 'subtitle') =>
 type Press = ReturnType<typeof useLongPress> & { onPointerEnter?: (e: React.PointerEvent) => void }
 
 /** The sidebar's fold-open control for an agent's chats. */
-type Disclosure = { open: boolean; controls: string; onToggle: () => void; onWarm?: () => void }
+type Disclosure = {
+  open: boolean
+  controls: string
+  onToggle: () => void
+  onWarm?: () => void
+  /** Selecting the row forgets a stored collapse, so the list opens while it's selected. */
+  onArrive?: () => void
+}
 
 // With a disclosure, the More button sits one step in from the edge, so the
 // chevron can keep the edge (and its place) whether the row is open or not.
@@ -1010,7 +1029,12 @@ function RowLink({
     <div className="group/row relative">
       <Link
         href={href}
+        draggable={false}
         {...press}
+        onClick={(e) => {
+          press.onClick(e)
+          if (!e.defaultPrevented) disclosure?.onArrive?.()
+        }}
         onKeyDown={
           disclosure &&
           ((e) => {
