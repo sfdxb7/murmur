@@ -1250,20 +1250,26 @@ const Turn = memo(function Turn({
                   const routines = block.items.flatMap((i) => (i.kind === 'tool' && i.routineId ? [i.routineId] : []))
                   // While it works in its browser: the browser itself, live.
                   const browsing = liveBlock && block.items.some((i) => i.kind === 'tool' && i.name.startsWith('browser_'))
+                  const shown = (
+                    <>
+                      {made.length > 0 && <ToolMedia items={made} />}
+                      {(screens.get(block.id) ?? []).map((screen) => (
+                        <MachineScreen key={screen.key} screen={screen} live={live} folded={foldedKeys.has(screen.key)} />
+                      ))}
+                      {finds.length > 0 && <Finds finds={finds} agent={seed} />}
+                      {seed && routines.map((id) => <RoutineCard key={id} agentId={seed} routineId={id} />)}
+                    </>
+                  )
+                  const hasResults = made.length > 0 || (screens.get(block.id)?.length ?? 0) > 0 || finds.length > 0 || routines.length > 0
                   return (
                     <Fragment key={block.id}>
-                      <Work items={block.items} live={liveBlock} hue={hue} seed={seed} />
+                      <Work items={block.items} live={liveBlock} hue={hue} seed={seed} results={!liveBlock && hasResults ? shown : undefined} />
                       <AnimatePresence initial={false}>
                         {browsing && who && step && (
                           <BrowserPeek key="peek" profile={who.id} agent={who} site={site} step={step} />
                         )}
                       </AnimatePresence>
-                      {made.length > 0 && <ToolMedia items={made} />}
-                      {screens.get(block.id)?.map((screen) => (
-                        <MachineScreen key={screen.key} screen={screen} live={live} folded={foldedKeys.has(screen.key)} />
-                      ))}
-                      {finds.length > 0 && <Finds finds={finds} agent={seed} />}
-                      {seed && routines.map((id) => <RoutineCard key={id} agentId={seed} routineId={id} />)}
+                      {liveBlock && hasResults && shown}
                     </Fragment>
                   )
                 }

@@ -12,6 +12,7 @@ import { create } from 'zustand'
 import { hermesHeaders, SESSION_CHECK } from '@/hermes/rest'
 import { stopGateway } from '@/hermes/gateway'
 import { adoptHermes, browserHermes, forgetForEveryHermes, forgetHermesStorage, HERMES_GONE, tabHermes } from '@/hermes/instance'
+import { clearAllSnapshots, forgetSnapshotsForHermes } from '@/state/chat-cache'
 
 export type ConnectionMode = 'token' | 'password' | 'sso' | 'unknown'
 /** How a Hermes behind a sign-in lets people in: a password, single sign-on, or both. */
@@ -176,6 +177,7 @@ export function useHermesManager() {
     mutationFn: (id: string) => connectionsApi.remove(id),
     onSuccess: (next, id) => {
       forgetHermesStorage(id)
+      void forgetSnapshotsForHermes(id)
       settle(next)
       // Removed the one in use: the server has moved this browser on.
       if (id === tabHermes()) {
@@ -326,6 +328,8 @@ export function useMurmurSession() {
     await fetch('/murmur/logout', { method: 'POST' }).catch(() => {})
     // The roster kept for a quick open (state/agents.ts) has names and chat titles in it, for each Hermes.
     forgetForEveryHermes('murmur:roster')
+    // Cached transcripts too: they belong to the person who was signed in.
+    await clearAllSnapshots().catch(() => {})
     location.reload()
   }, [])
 
