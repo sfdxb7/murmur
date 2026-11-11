@@ -12,7 +12,8 @@ vi.mock('./umbrel-context', () => ({ ensureUmbrelContext: vi.fn(async () => {}) 
 vi.mock('./umbrel-mcp', () => ({ ensureUmbrelMcp: vi.fn(async () => {}) }))
 vi.mock('./mail', () => ({ forgetInheritedMail: vi.fn(async () => {}) }))
 
-const { agentsKey, asTheyAre, createAgent, deleteAgent, revealAgent, rosterQuery, saysGone } = await import('./agents')
+const { agentHidden, agentsKey, asTheyAre, createAgent, deleteAgent, revealAgent, rosterQuery, saysGone, toAgent, visibleAgents } =
+  await import('./agents')
 const { rpc } = (await import('@/hermes/gateway')) as unknown as { rpc: ReturnType<typeof vi.fn> }
 const { api } = (await import('@/hermes/rest')) as unknown as { api: Record<string, ReturnType<typeof vi.fn>> }
 const { listProfiles } = (await import('@/hermes/compat')) as unknown as { listProfiles: ReturnType<typeof vi.fn> }
@@ -195,6 +196,40 @@ describe('the roster kept on this device', () => {
     const off = observer.subscribe(() => {})
     await vi.waitFor(() => expect(asTheyAre(observer.getCurrentResult())?.map((a) => a.id)).toEqual(['default', 'zed']))
     off()
+  })
+
+  it('keeps a hidden agent on the roster it stores, so Settings can still find them', async () => {
+    listProfiles.mockResolvedValue([
+      { name: 'default', is_default: true, ui_meta: { 'hermes-bots': { title: 'Hermes' } } },
+      { name: 'scout', is_default: false, ui_meta: { 'hermes-bots': { title: 'Scout', hidden: true } } },
+    ])
+    const observer = open()
+    const off = observer.subscribe(() => {})
+    await vi.waitFor(() => expect(observer.getCurrentResult().data?.map((a) => a.id)).toEqual(['default', 'scout']))
+    const data = observer.getCurrentResult().data!
+    expect(agentHidden(data.find((a) => a.id === 'scout')!)).toBe(true)
+    expect(visibleAgents(data).map((a) => a.id)).toEqual(['default'])
+    off()
+  })
+
+  it('keeps an agent hidden when Hermes says so, and off the lists people browse', () => {
+    const hidden = toAgent({
+      name: 'scout',
+      is_default: false,
+      ui_meta: { 'hermes-bots': { title: 'Scout', color: '#4f8', hidden: true } },
+    })
+    const shown = toAgent({ name: 'default', is_default: true, ui_meta: { 'hermes-bots': { title: 'Hermes' } } })
+    const unclear = toAgent({
+      name: 'maybe',
+      is_default: false,
+      ui_meta: { 'hermes-bots': { title: 'Maybe', hidden: 'yes' } },
+    })
+    expect(agentHidden(hidden)).toBe(true)
+    expect(agentHidden(shown)).toBe(false)
+    expect(agentHidden(unclear)).toBe(false)
+    expect(visibleAgents([hidden, shown, unclear]).map((a) => a.id)).toEqual(['default', 'maybe'])
+    // The flag rides along with the rest of the record, so a later edit can merge it.
+    expect(hidden.botMeta).toMatchObject({ title: 'Scout', color: '#4f8', hidden: true })
   })
 
   it('takes a change made before Hermes answers, so it still shows and lands (state/records.ts)', () => {
