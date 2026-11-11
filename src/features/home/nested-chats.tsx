@@ -317,6 +317,7 @@ export function Item({
   return (
     <Link
       href={href}
+      draggable={false}
       title={title}
       data-nav={nav ? 'chat' : undefined}
       aria-current={selected ? 'page' : undefined}
