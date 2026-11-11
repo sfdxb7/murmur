@@ -1,4 +1,4 @@
-import { Fragment, memo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Ban, ChevronRight, Clock, ShieldCheck, Sparkle, X } from 'lucide-react'
 import { Orb } from '@/ui/orb'
@@ -39,8 +39,26 @@ export function summary(items: WorkItem[]) {
   const tools = steps.flatMap((i) => (i.kind === 'tool' ? [i.name] : []))
   if (!tools.length) return time ? `Thought for ${time}` : 'Thought briefly'
   const did = didSummary(tools)
-  if (did) return time ? `${did} · ${time}` : did
-  return time ? `Worked for ${time} · ${tools.length} steps` : `${tools.length} steps`
+  const failed = items.some((i) => i.kind === 'tool' && i.status === 'error')
+  const line = did ? (time ? `${did} · ${time}` : did) : time ? `Worked for ${time} · ${tools.length} steps` : `${tools.length} steps`
+  return failed ? `${line} · Didn’t finish` : line
+}
+
+/** Whether the one-line summary can open into its steps or its results. */
+export function canOpenWork(items: WorkItem[], hasResults = false) {
+  if (hasResults) return true
+  const only = items.length === 1 ? items[0] : undefined
+  return items.length > 1 || only?.kind === 'approval' || (only?.kind === 'thinking' && !!only.text.trim())
+}
+
+/** A finished stretch that failed: open so the failed step is in view, when there's a list or results to show. */
+export function workStartsOpen(items: WorkItem[], live: boolean, hasResults = false) {
+  return !live && canOpenWork(items, hasResults) && items.some((i) => i.kind === 'tool' && i.status === 'error')
+}
+
+/** Live, the results sit beside the line so you can watch; afterwards they wait inside the fold. */
+export function workShowsResults(open: boolean, live: boolean) {
+  return live || open
 }
 
 function liveLine(items: WorkItem[]) {
@@ -62,13 +80,30 @@ const swap = { duration: 0.28, ease: [0.16, 1, 0.3, 1] } as const
  * shimmering present-tense line. Done: what it did ("Searched the web · 19s"),
  * which opens into the step list.
  */
-export function Work({ items, live, hue, seed }: { items: WorkItem[]; live: boolean; hue: number; seed?: string }) {
-  const [open, setOpen] = useState(false)
+export function Work({
+  items,
+  live,
+  hue,
+  seed,
+  results,
+}: {
+  items: WorkItem[]
+  live: boolean
+  hue: number
+  seed?: string
+  /** Pictures, screens, finds, routines: mounted only once this work is opened (or while it is live). */
+  results?: ReactNode
+}) {
+  const failed = items.some((i) => i.kind === 'tool' && i.status === 'error')
+  const [open, setOpen] = useState(() => workStartsOpen(items, live, results != null))
+  const wasLive = useRef(live)
+  useEffect(() => {
+    if (wasLive.current && !live && failed && canOpenWork(items, results != null)) setOpen(true)
+    wasLive.current = live
+  }, [live, failed, items, results])
   const reduce = useReducedMotion()
   const line = live ? liveLine(items) : null
-  // One step is already said in full on the line itself; there's nothing more to open.
-  const only = items.length === 1 ? items[0] : undefined
-  const canOpen = items.length > 1 || only?.kind === 'approval' || (only?.kind === 'thinking' && !!only.text.trim())
+  const canOpen = canOpenWork(items, results != null)
   // Steps already on screen when the list opened don't rise in; ones that arrive while you watch do.
   const shown = useRef(new Set<string>())
   const toggle = () => {
@@ -106,6 +141,9 @@ export function Work({ items, live, hue, seed }: { items: WorkItem[]; live: bool
               exit={reduce ? { opacity: 0 } : { opacity: 0, y: -14, transition: { ...swap, duration: 0.2 } }}
             >
               <span className="truncate">{line ? line.text : summary(items)}</span>
+              {!line && failed && (
+                <X size={14} strokeWidth={2} aria-hidden className="flex-none text-danger" />
+              )}
               {!line && canOpen && (
                 <ChevronRight
                   size={14}
@@ -133,11 +171,14 @@ export function Work({ items, live, hue, seed }: { items: WorkItem[]; live: bool
             transition={reduce ? { duration: 0.12 } : { height: spring, opacity: { duration: 0.24, delay: 0.04 } }}
             className="overflow-hidden"
           >
-            <ol className="px-1 pt-2 pb-2">
-              {items.map((item, i) => (
-                <Step key={item.id} item={item} last={i === items.length - 1} live={live} rise={rise(item.id)} />
-              ))}
-            </ol>
+            {canOpenWork(items) && (
+              <ol className="px-1 pt-2 pb-2">
+                {items.map((item, i) => (
+                  <Step key={item.id} item={item} last={i === items.length - 1} live={live} rise={rise(item.id)} />
+                ))}
+              </ol>
+            )}
+            {results && <div className="flex flex-col gap-3 px-1 pb-2">{results}</div>}
           </motion.div>
         )}
       </AnimatePresence>

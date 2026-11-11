@@ -42,6 +42,13 @@ import {
 import { errandsOf, isYours, sentItems, wakeItems, withSeenHelpers, type Errand } from '@/features/chat/wake'
 import { along, madeRoutine, soundsScheduled, toldIn, type Carried } from '@shared/routines.ts'
 import { reportHere } from '@/state/routines'
+import {
+  clearAllSnapshots,
+  readSnapshots,
+  touchSnapshot,
+  writeSnapshot,
+  type CachedChat,
+} from '@/state/chat-cache'
 
 export type Chat = {
   id: string
@@ -75,6 +82,8 @@ export type Chat = {
   starting?: boolean
   /** The agent has been told how routines report in this chat (shared/routines.ts). */
   told?: boolean
+  /** Painted from this device's cache: a background read will confirm it. */
+  cached?: boolean
 }
 
 export type Goal = { title: string; status: string }
@@ -538,19 +547,34 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   ensure(id, profile)
   patch(id, () => ({ speaker }))
   viewing.add(id)
-  const chat = getChat(id)!
-  // History already in this tab: show it, and only attach again if Hermes
-  // let the runtime go (leaving the chat, or a reconnect). Don't refetch
-  // the transcript; that was painting a loader over messages already here.
-  if (chat.ready) {
+  void touchSnapshot(profile, id).catch(() => {})
+
+  const showWhatWeHave = () => {
+    const chat = getChat(id)!
+    // History already in this tab: show it, and only attach again if Hermes
+    // let the runtime go (leaving the chat, or a reconnect). Don't refetch
+    // the transcript; that was painting a loader over messages already here.
     if (!chat.runtimeId) void open(id)
+    // From the on-device cache (a new tab, or the app after it was closed):
+    // paint now, then read again in the background and fold any new rows in.
+    if (chat.cached) void revalidate(id, profile, speaker)
+  }
+
+  if (getChat(id)!.ready) {
+    showWhatWeHave()
     return Promise.resolve()
   }
   const existing = opening.get(id)
   if (existing) return existing
-  if (!chat.named) void readTitle(id, profile)
+  if (!getChat(id)!.named) void readTitle(id, profile)
   const task = (async () => {
     try {
+      await whenChatCacheReady()
+      if (!viewing.has(id)) return
+      if (getChat(id)!.ready) {
+        showWhatWeHave()
+        return
+      }
       if (!(await readHistory(id, profile, speaker))) return
       await open(id)
     } finally {
@@ -559,6 +583,47 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   })()
   opening.set(id, task)
   return task
+}
+
+const revalidating = new Map<string, Promise<void>>()
+
+/** Confirm a cached transcript with Hermes, without clearing what's on screen. */
+function revalidate(id: string, profile: string, speaker?: Speaker) {
+  const existing = revalidating.get(id)
+  if (existing) return existing
+  const task = (async () => {
+    try {
+      let missing = false
+      let rows = await readRows(id, profile, 0, FIRST_PAGE).catch((e): Row[] => {
+        if (!(e instanceof HermesError && e.status === 404)) throw e
+        missing = true
+        return []
+      })
+      if (!missing && rows.length >= FIRST_PAGE && !rows.some((r) => r.role === 'user')) rows = await readRows(id, profile)
+      if (missing) absent.add(id)
+      else absent.delete(id)
+      const items = rowsToItems(rows, speaker)
+      const saved = new Set(items.map(rowOf))
+      reach.set(id, { rows, offset: rows.length })
+      patch(id, (c) => ({
+        items: [...items, ...c.items.filter((i) => rowOf(i) == null || !saved.has(rowOf(i)))],
+        ready: true,
+        cached: undefined,
+        stalled: undefined,
+        older: rows.length >= (rows.length > FIRST_PAGE ? PAGE : FIRST_PAGE),
+        told: c.told || rows.some((r) => r.role === 'user' && toldIn(r.content ?? '')),
+      }))
+    } catch {
+      // Keep what the device already has; the next open will try again.
+    }
+  })().finally(() => revalidating.delete(id))
+  revalidating.set(id, task)
+  return task
+}
+
+/** Tests: wait for a background confirm, if one is in flight. */
+export function whenChatRevalidated(id: string) {
+  return revalidating.get(id) ?? Promise.resolve()
 }
 
 /**
@@ -2357,11 +2422,130 @@ function cancelApprovals(payload: P) {
   })
 }
 
+let cacheReady = false
+let cacheReadyWait: Promise<void> | undefined
+
+export function isChatCacheReady() {
+  return cacheReady
+}
+
+export function whenChatCacheReady() {
+  return cacheReadyWait ?? Promise.resolve()
+}
+
+function applyCached(entries: CachedChat[]) {
+  if (!entries.length) return
+  useChats.setState((s) => {
+    const chats = { ...s.chats }
+    for (const entry of entries) {
+      const have = chats[entry.id]
+      if (have?.ready && have.items.length) continue
+      chats[entry.id] = {
+        id: entry.id,
+        profile: entry.profile,
+        items: entry.items,
+        status: have?.status ?? 'idle',
+        title: have?.title ?? entry.title,
+        ready: true,
+        older: entry.older,
+        named: entry.named,
+        speaker: have?.speaker ?? entry.speaker,
+        cached: true,
+        runtimeId: have?.runtimeId,
+        turns: have?.turns,
+        model: have?.model,
+        provider: have?.provider,
+        vibes: have?.vibes,
+      }
+    }
+    return { chats }
+  })
+}
+
+export function startChatCache() {
+  if (cacheReadyWait) return cacheReadyWait
+  cacheReadyWait = (async () => {
+    try {
+      applyCached(await readSnapshots())
+    } catch {
+      // Private mode, or a schema we can't read: load from the network as usual.
+    } finally {
+      cacheReady = true
+    }
+  })()
+  return cacheReadyWait
+}
+
+/** Tests: apply a prepared cache, as a reload of the tab would. */
+export async function reloadChatCache() {
+  cacheReady = false
+  cacheReadyWait = undefined
+  await startChatCache()
+}
+
+startChatCache()
+
+const dirty = new Set<string>()
+let flushTimer: ReturnType<typeof setTimeout> | undefined
+
+function markDirty(id: string) {
+  const chat = getChat(id)
+  if (!chat?.ready || !chat.items.length) return
+  dirty.add(id)
+}
+
+function scheduleFlush() {
+  if (flushTimer != null) return
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined
+    void flushChatCache()
+  }, 800)
+}
+
+/** Write any dirty chats now (the tab is closing, or a test is asking). */
+export function flushChatCache() {
+  if (flushTimer != null) {
+    clearTimeout(flushTimer)
+    flushTimer = undefined
+  }
+  const ids = [...dirty]
+  dirty.clear()
+  return Promise.all(
+    ids.map(async (id) => {
+      const chat = getChat(id)
+      if (!chat?.ready) return
+      await writeSnapshot(chat).catch(() => {})
+    }),
+  ).then(() => {})
+}
+
+/** Sign-out: drop the on-device transcripts before the page reloads. */
+export async function forgetCachedChats() {
+  dirty.clear()
+  if (flushTimer != null) {
+    clearTimeout(flushTimer)
+    flushTimer = undefined
+  }
+  await clearAllSnapshots().catch(() => {})
+}
+
+function wireCache() {
+  useChats.subscribe((s, prev) => {
+    for (const id of Object.keys(s.chats)) {
+      if (s.chats[id] !== prev.chats[id]) {
+        markDirty(id)
+        scheduleFlush()
+      }
+    }
+  })
+}
+
 let wired = false
 
 export function wireChats() {
   if (wired) return
   wired = true
+  wireCache()
   gateway.onEvent(onEvent)
   gateway.onRequest(onServerRequest)
   gateway.onEvent((ev) => {
@@ -2377,7 +2561,11 @@ export function wireChats() {
   // their events flow again (Hermes's client replays anything we missed). The
   // rest are let go: Hermes reaps them, and they re-attach when next used.
   // Back in the foreground, online again, or Hermes back: history that couldn't be read is read now.
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && readUnread())
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') readUnread()
+    else void flushChatCache()
+  })
+  window.addEventListener('pagehide', () => void flushChatCache())
   window.addEventListener('online', readUnread)
   gateway.onState((state) => {
     if (state !== 'open') return

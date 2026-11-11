@@ -28,7 +28,8 @@ vi.stubGlobal('window', {
   clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
 })
 
-const { getChat, leaveChat, openChat, readUnread, useChats, wireChats } = await import('./chats')
+const { memoryChatCache, resetChatCacheForTests, useChatCacheDriver, writeSnapshot } = await import('./chat-cache')
+const { flushChatCache, getChat, leaveChat, openChat, readUnread, reloadChatCache, useChats, whenChatRevalidated, wireChats } = await import('./chats')
 
 const said = (items: ChatItem[]) =>
   items.flatMap((i) => (i.kind === 'user' || i.kind === 'assistant' ? [`${i.kind}: ${i.text}`] : [i.kind]))
@@ -215,5 +216,81 @@ describe('coming back to a chat already read', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(getChat('back')!.runtimeId).toBe('rt-2')
+  })
+})
+
+describe('a chat remembered on this device', () => {
+  afterEach(() => {
+    resetChatCacheForTests()
+  })
+
+  it('paints the cached messages at once, then confirms them without duplicating rows', async () => {
+    const mem = memoryChatCache()
+    useChatCacheDriver(mem)
+    const cached: ChatItem[] = [
+      { kind: 'user', id: 'h1', text: 'Hello', at: 1, rowId: 1 },
+      { kind: 'assistant', id: 'h2', text: 'Hi there', streaming: false, at: 2, rowId: 2 },
+    ]
+    await writeSnapshot({ id: 'remembered', profile: 'default', items: cached, title: 'Hello', named: true }, 1)
+    await reloadChatCache()
+    const before = getChat('remembered')
+    expect(before?.ready).toBe(true)
+    expect(before?.cached).toBe(true)
+    expect(said(before!.items)).toEqual(['user: Hello', 'assistant: Hi there'])
+
+    history([
+      { id: 1, role: 'user', timestamp: 1, content: 'Hello' },
+      { id: 2, role: 'assistant', timestamp: 2, content: 'Hi there' },
+      { id: 3, role: 'user', timestamp: 3, content: 'And later' },
+    ])
+    resume.mockResolvedValue({ session_id: 'rt-remembered' })
+    get.mockClear()
+    const opening = openChat('remembered', 'default')
+    // The store already has the cached page: no loader, no wait on the network.
+    expect(getChat('remembered')!.ready).toBe(true)
+    expect(said(getChat('remembered')!.items)).toEqual(['user: Hello', 'assistant: Hi there'])
+    await opening
+    await whenChatRevalidated('remembered')
+    expect(get.mock.calls.filter(([path]) => String(path).includes('/messages'))).toHaveLength(1)
+    expect(said(getChat('remembered')!.items)).toEqual(['user: Hello', 'assistant: Hi there', 'user: And later'])
+    expect(getChat('remembered')!.cached).toBeFalsy()
+    const ids = getChat('remembered')!.items.map((i) => i.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('writes a finished chat to the store, and will not keep a vault prompt', async () => {
+    const mem = memoryChatCache()
+    useChatCacheDriver(mem)
+    useChats.setState((s) => ({
+      chats: {
+        ...s.chats,
+        persist: {
+          id: 'persist',
+          profile: 'default',
+          ready: true,
+          status: 'idle',
+          items: [
+            { kind: 'user', id: 'h1', text: 'Store this', at: 1, rowId: 1 },
+            {
+              kind: 'secret',
+              id: 's1',
+              requestId: 'req-secret',
+              ask: 'login',
+              prompt: 'Password',
+              status: 'pending',
+            },
+          ],
+        },
+      },
+    }))
+    await flushChatCache()
+    // flushChatCache only writes ids marked dirty by the subscription. Mark and flush again via write through the store tick.
+    // The subscription may have marked it if wireCache is on. If not (setState without going through patch after wire), force a tick:
+    useChats.setState((s) => ({ chats: { ...s.chats, persist: { ...s.chats.persist } } }))
+    await flushChatCache()
+    const stored = [...mem.records.values()].find((e) => e.id === 'persist')
+    expect(stored).toBeTruthy()
+    expect(stored!.items.map((i) => i.kind)).toEqual(['user'])
+    expect(stored!.items.some((i) => i.kind === 'secret')).toBe(false)
   })
 })

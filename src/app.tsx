@@ -7,7 +7,7 @@ import { MotionConfig, motion, useReducedMotion } from 'motion/react'
 import { create } from 'zustand'
 import { MurmurMark } from '@/ui/brand'
 import { startGateway } from '@/hermes/gateway'
-import { wireChats } from '@/state/chats'
+import { isChatCacheReady, whenChatCacheReady, wireChats } from '@/state/chats'
 import { wireSessionLists } from '@/state/sync'
 import { wireChatConnects } from '@/state/hosted-apps-chat'
 import { markWelcomed, useReadiness, useWelcomed } from '@/state/readiness'
@@ -114,6 +114,16 @@ function Gate({ children }: { children: ReactNode }) {
   const onboarding = location.startsWith('/welcome') || location === '/settings/hermes'
   // Hold for the roster too, so the app arrives whole and the splash mark has somewhere to land.
   // Groups are part of it (or they'd push rows down a beat later), but never worth a long wait.
+  const [cached, setCached] = useState(isChatCacheReady)
+  useEffect(() => {
+    if (cached) return
+    const t = setTimeout(() => setCached(true), 800)
+    void whenChatCacheReady().then(() => {
+      clearTimeout(t)
+      setCached(true)
+    })
+    return () => clearTimeout(t)
+  }, [cached])
   const agents = useAgents()
   // The welcome is for someone new to Murmur. A Hermes already in use (set up
   // on another device, or in Hermes's own apps) goes straight in here too.
@@ -139,7 +149,7 @@ function Gate({ children }: { children: ReactNode }) {
   // check, which still runs: a model that's gone since still sends them to set up.
   const welcomed = useWelcomed()
   const checking = readiness === 'loading' && !welcomed
-  const waiting = ((checking || (roster && readiness !== 'unknown')) && !onboarding) || away
+  const waiting = ((checking || (roster && readiness !== 'unknown') || !cached) && !onboarding) || away
   // The splash lingers until the app is drawn, so its mark can settle into the header's.
   const [splash, setSplash] = useState(waiting)
   useLayoutEffect(() => {
