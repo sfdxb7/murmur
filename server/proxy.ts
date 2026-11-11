@@ -11,6 +11,7 @@ import type { Hermes } from './hermes.ts'
 import { HERMES_PARAM } from './connection.ts'
 import { accepted, sendJson } from './http.ts'
 import { sendReturnPage } from './oauth-return.ts'
+import { isSessionMessages, slimTranscript } from './slim-transcript.ts'
 
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'te', 'trailer'])
 // Browser-side identity never reaches Hermes; Murmur speaks for the browser.
@@ -22,9 +23,10 @@ const stripped = (key: string) => HOP_BY_HOP.has(key) || STRIP.has(key) || key.s
 // Hermes pages carry its session token; only files the person asked for may be markup.
 const MARKUP = /^\s*(text\/html|application\/xhtml|image\/svg|text\/xml|application\/xml)/i
 const DOWNLOAD = '/hermes/api/fs/download'
-// Hermes sends JSON as it is. A long chat's transcript is the most Murmur
-// fetches, and it shrinks several times over. Brotli stays at a quality that
-// costs less time than it saves on a phone's connection.
+// JSON is compressed on the way to the phone. A long chat's transcript is
+// the most Murmur fetches: unused Hermes fields are dropped first (see
+// slim-transcript.ts), then Brotli at a quality that costs less time than
+// it saves on a slow connection.
 const JSON_TYPE = /^\s*application\/(?:[\w.+-]+\+)?json\b/i
 const BROTLI = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } }
 
@@ -100,6 +102,39 @@ export function createProxy(pick: Pick) {
           headers['x-content-type-options'] = 'nosniff'
           // A downloaded page or SVG opened in a tab runs in an opaque origin, away from Murmur.
           if (MARKUP.test(type)) headers['content-security-policy'] = 'sandbox'
+          const slim = up.statusCode === 200 && JSON_TYPE.test(type) && isSessionMessages(url.pathname)
+          if (slim) {
+            const chunks: Buffer[] = []
+            up.on('error', () => res.destroy())
+            up.on('data', (chunk: Buffer) => chunks.push(chunk))
+            up.on('end', () => {
+              if (res.destroyed) return
+              let body: Buffer = Buffer.concat(chunks)
+              const encoded = up.headers['content-encoding']
+              try {
+                body = Buffer.from(decodeBody(body, encoded))
+                delete headers['content-encoding']
+                body = Buffer.from(slimTranscript(body))
+              } catch {
+                /* send the bytes Hermes sent, still encoded */
+              }
+              const encoding = encodingOf(req, body.length)
+              if (encoding) {
+                headers['content-encoding'] = encoding
+                headers.vary = [headers.vary, 'Accept-Encoding'].filter(Boolean).join(', ')
+                delete headers['content-length']
+              } else {
+                headers['content-length'] = body.length
+              }
+              res.writeHead(up.statusCode ?? 502, headers)
+              if (!encoding) return void res.end(body)
+              const zip = encoding === 'br' ? zlib.createBrotliCompress(BROTLI) : zlib.createGzip()
+              zip.on('error', () => res.destroy())
+              zip.end(body)
+              zip.pipe(res)
+            })
+            return
+          }
           const encoding = up.statusCode === 200 && JSON_TYPE.test(type) ? encodingFor(req, up) : undefined
           if (encoding) {
             headers['content-encoding'] = encoding
@@ -221,8 +256,22 @@ export function createProxy(pick: Pick) {
 /** The best encoding the browser takes for this response, unless Hermes encoded it or it's too small to gain. */
 function encodingFor(req: http.IncomingMessage, up: http.IncomingMessage) {
   if (up.headers['content-encoding'] || Number(up.headers['content-length'] ?? Infinity) < 1024) return undefined
+  return encodingOf(req, Infinity)
+}
+
+function encodingOf(req: http.IncomingMessage, bytes: number) {
+  if (bytes < 1024) return undefined
   const takes = accepted(req.headers['accept-encoding'])
   return takes('br') ? 'br' : takes('gzip') ? 'gzip' : undefined
+}
+
+function decodeBody(buf: Buffer, encoding?: string | string[]) {
+  const kind = String(Array.isArray(encoding) ? encoding[0] : encoding ?? '')
+  if (!kind || kind === 'identity') return buf
+  if (/br/.test(kind)) return zlib.brotliDecompressSync(buf)
+  if (/gzip/.test(kind)) return zlib.gunzipSync(buf)
+  if (/deflate/.test(kind)) return zlib.inflateSync(buf)
+  throw new Error(`unknown encoding ${kind}`)
 }
 
 /**

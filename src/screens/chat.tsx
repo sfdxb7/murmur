@@ -114,7 +114,7 @@ const NONE: ChatItem[] = []
 // message, and /chat/:agent/:id is a stored chat.
 
 
-export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: string }) {
+export function ChatScreen({ agentId, chatId, active = true }: { agentId: string; chatId?: string; active?: boolean }) {
   const agents = useAgents()
   const agent = agents.data?.find((a) => a.id === agentId)
   const gone = useAgentGone(agentId)
@@ -138,10 +138,10 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
 
   useEffect(() => {
     setOpenError(false)
-    if (!id || !agent) return
+    if (!active || !id || !agent) return
     openChat(id, agentId, speakerOf(agent)).catch(() => setOpenError(true))
-  }, [id, agentId, agent])
-  useEffect(() => (id ? () => leaveChat(id) : undefined), [id])
+  }, [active, id, agentId, agent])
+  useEffect(() => (id && active ? () => leaveChat(id) : undefined), [id, active])
 
   // A blank chat keeps its model choice locally until Hermes creates it.
   const [draftPick, setDraftPick] = useState<ModelPick>()
@@ -227,7 +227,7 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
   const arrival = useArrival()
   // Hermes has the chat but won't open it yet: it's being tried again, and says so meanwhile.
   const shut = !!chat?.ready && !!chat.stalled
-  const typable = !!agent && !openError && !shut
+  const typable = !!agent && !openError && !shut && active
   useEffect(() => {
     if (fine && typable) composer.current?.focus()
   }, [arrival, fine, typable])
@@ -797,7 +797,7 @@ export function ChatScreen({ agentId, chatId }: { agentId: string; chatId?: stri
               />
             ) : agent && (isDraft || (chat?.ready && !busy)) ? (
               <EmptyState agent={agent} orb={typing ? 'listening' : 'idle'} onStart={(prompt) => post(prompt)} />
-            ) : id && !chat?.ready ? (
+            ) : id && !chat?.ready && !chat?.items.length ? (
               <ThreadSkeleton stalled={chat?.stalled} onRetry={readUnread} />
             ) : null
           }

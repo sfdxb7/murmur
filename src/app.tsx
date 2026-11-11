@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Route, Router, Switch, useLocation } from 'wouter'
 import { Toaster } from 'sonner'
@@ -81,49 +81,7 @@ export function App() {
               <ShareSheet />
               <Shell>
                 <Suspense>
-                  <Switch>
-                    <Route path="/chat/:agent/:chat?">
-                      {(p) => (
-                        <Pushed>
-                          <ChatScreen agentId={p.agent} chatId={p.chat} />
-                        </Pushed>
-                      )}
-                    </Route>
-                    <Route path="/agent/:agent">
-                      {(p) => (
-                        <Pushed>
-                          <AgentScreen agentId={p.agent} />
-                        </Pushed>
-                      )}
-                    </Route>
-                    <Route path="/chats/:agent">
-                      {(p) => (
-                        <Pushed>
-                          <ChatsScreen agentId={p.agent} />
-                        </Pushed>
-                      )}
-                    </Route>
-                    <Route path="/agents">
-                      <Pushed>
-                        <AgentsScreen />
-                      </Pushed>
-                    </Route>
-                    <Route path="/group/:group">
-                      {(p) => (
-                        <Pushed>
-                          <GroupScreen groupId={p.group} />
-                        </Pushed>
-                      )}
-                    </Route>
-                    <Route path="/new">
-                      <NewChat />
-                    </Route>
-                    <Route path="/settings/:section?">{(p) => <SettingsScreen section={p.section} />}</Route>
-                    <Route path="/welcome/:step?">{(p) => <OnboardingScreen step={p.step} />}</Route>
-                    <Route>
-                      <HomeScreen />
-                    </Route>
-                  </Switch>
+                  <Screens />
                 </Suspense>
               </Shell>
             </Gate>
@@ -204,16 +162,95 @@ function NewChat() {
   return null
 }
 
+/**
+ * The last chat stays mounted when you leave it: going back shows the
+ * messages already on screen, instead of reading them again and painting a
+ * loader over them. Hermes is still let go (the chat is inactive); coming
+ * back only re-attaches. Other screens still unmount as they did.
+ */
+let keptChatPath: string | undefined
+
+function Screens() {
+  const [location] = useLocation()
+  const match = /^\/chat\/([^/]+)(?:\/([^/]+))?/.exec(location)
+  const visible = match
+    ? { agentId: decodeURIComponent(match[1]), chatId: match[2] ? decodeURIComponent(match[2]) : undefined }
+    : undefined
+  const kept = useRef(visible)
+  if (visible) {
+    kept.current = visible
+    keptChatPath = location
+  }
+  const show = !!visible
+  const chat = kept.current
+  return (
+    <>
+      {chat && (
+        <div
+          className={show ? undefined : 'invisible pointer-events-none fixed inset-0 -z-10'}
+          inert={show ? undefined : true}
+          aria-hidden={show ? undefined : true}
+        >
+          <Pushed off={!show}>
+            <ChatScreen agentId={chat.agentId} chatId={chat.chatId} active={show} />
+          </Pushed>
+        </div>
+      )}
+      {!show && (
+        <Switch>
+          <Route path="/agent/:agent">
+            {(p) => (
+              <Pushed>
+                <AgentScreen agentId={p.agent} />
+              </Pushed>
+            )}
+          </Route>
+          <Route path="/chats/:agent">
+            {(p) => (
+              <Pushed>
+                <ChatsScreen agentId={p.agent} />
+              </Pushed>
+            )}
+          </Route>
+          <Route path="/agents">
+            <Pushed>
+              <AgentsScreen />
+            </Pushed>
+          </Route>
+          <Route path="/group/:group">
+            {(p) => (
+              <Pushed>
+                <GroupScreen groupId={p.group} />
+              </Pushed>
+            )}
+          </Route>
+          <Route path="/new">
+            <NewChat />
+          </Route>
+          <Route path="/settings/:section?">{(p) => <SettingsScreen section={p.section} />}</Route>
+          <Route path="/welcome/:step?">{(p) => <OnboardingScreen step={p.step} />}</Route>
+          <Route>
+            <HomeScreen />
+          </Route>
+        </Switch>
+      )}
+    </>
+  )
+}
+
 /** Phones: a pushed page can be dragged back from the left edge to the page beneath. */
-function Pushed({ children }: { children: ReactNode }) {
+function Pushed({ children, off: forceOff }: { children: ReactNode; off?: boolean }) {
   const wide = useIsWide()
   const [location] = useLocation()
   // Kept current: a page beneath that's since been deleted shows what replaced it.
   const up = useUpFrom(location)
+  const off = wide || forceOff
   // Always wrapped, the gesture just off when wide: crossing 900px (an iPad
   // turning) must not remount the page, or its open sheets and edits go with it.
+  // A chat kept mounted off screen also leaves the gesture off, so it cannot
+  // steal an edge swipe from the screen that's actually showing.
   return (
-    <SwipeBack off={wide} under={wide ? null : <Beneath path={up} />}>
+    <SwipeBack off={off} under={off ? null : <Beneath path={up} />}>
       {children}
     </SwipeBack>
   )
@@ -221,6 +258,8 @@ function Pushed({ children }: { children: ReactNode }) {
 
 /** The page "back" would land on, as it looks (see upFrom in src/lib/transitions.ts). */
 function Beneath({ path }: { path: string }) {
+  // The chat already kept mounted is that page: don't start a second copy.
+  if (path === keptChatPath) return <div className="h-dvh bg-bg" aria-hidden />
   const [, kind, id, sub] = /^\/(chat|chats|agent)\/([^/]+)(?:\/([^/]+))?/.exec(path) ?? []
   if (kind === 'agent') return <AgentScreen agentId={decodeURIComponent(id)} />
   if (kind === 'chats') return <ChatsScreen agentId={decodeURIComponent(id)} />
