@@ -28,7 +28,7 @@ vi.stubGlobal('window', {
   clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
 })
 
-const { getChat, leaveChat, openChat, readUnread, wireChats } = await import('./chats')
+const { getChat, leaveChat, openChat, readUnread, useChats, wireChats } = await import('./chats')
 
 const said = (items: ChatItem[]) =>
   items.flatMap((i) => (i.kind === 'user' || i.kind === 'assistant' ? [`${i.kind}: ${i.text}`] : [i.kind]))
@@ -189,5 +189,31 @@ describe('a chat Hermes turns away', () => {
     const tries = resume.mock.calls.length
     await vi.advanceTimersByTimeAsync(60_000)
     expect(resume).toHaveBeenCalledTimes(tries)
+  })
+})
+
+describe('coming back to a chat already read', () => {
+  it('keeps the messages it has, and does not fetch them again', async () => {
+    history([{ id: 1, role: 'user', timestamp: 1, content: 'Hello' }])
+    resume.mockResolvedValue({ session_id: 'rt-1' })
+    await openChat('back', 'default')
+    expect(said(getChat('back')!.items)).toEqual(['user: Hello'])
+    const fetches = get.mock.calls.filter(([path]) => String(path).includes('/messages')).length
+    expect(fetches).toBeGreaterThan(0)
+    leaveChat('back')
+    // Hermes lets the runtime go once the chat is off screen (a reconnect, or it reaps it).
+    useChats.setState((s) => ({
+      chats: { ...s.chats, back: { ...s.chats.back, runtimeId: undefined } },
+    }))
+    get.mockClear()
+    resume.mockResolvedValue({ session_id: 'rt-2' })
+    await openChat('back', 'default')
+    expect(get.mock.calls.filter(([path]) => String(path).includes('/messages'))).toHaveLength(0)
+    expect(said(getChat('back')!.items)).toEqual(['user: Hello'])
+    expect(getChat('back')!.ready).toBe(true)
+    // Attach again in the background, once Hermes has a new runtime.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(getChat('back')!.runtimeId).toBe('rt-2')
   })
 })

@@ -343,16 +343,29 @@ function words(content: unknown): string | null {
     .join('')
 }
 
-/** A saved row as this page reads it: whatever shape Hermes kept its words in, they're text here, and your pictures beside them. */
+/**
+ * A saved row as this page reads it: whatever shape Hermes kept its words
+ * in, they're text here, and your pictures beside them. Hermes also sends
+ * fields this page never draws (Codex reasoning dumps, API mirrors, unique
+ * ids of every tool hop) that can be half a long chat's weight; those stay
+ * behind so a return visit and a search through `reach` aren't carrying them.
+ */
 function plain(row: Row): Row {
   const calls = Array.isArray(row.tool_calls) ? row.tool_calls.filter((c) => c && typeof c === 'object') : null
   const pictures = row.role === 'user' ? picturesIn(row.content) : []
   return {
-    ...row,
+    id: row.id,
+    role: row.role,
     content: words(row.content),
     pictures: pictures.length ? pictures : undefined,
-    reasoning: typeof row.reasoning === 'string' ? row.reasoning : null,
     tool_calls: calls,
+    tool_call_id: row.tool_call_id,
+    tool_name: row.tool_name,
+    reasoning: typeof row.reasoning === 'string' ? row.reasoning : null,
+    display_kind: row.display_kind,
+    display_metadata: row.display_metadata,
+    display_content: row.display_content,
+    timestamp: row.timestamp,
   }
 }
 
@@ -526,13 +539,19 @@ export function openChat(id: string, profile: string, speaker?: Speaker): Promis
   patch(id, () => ({ speaker }))
   viewing.add(id)
   const chat = getChat(id)!
-  if (chat.ready && chat.runtimeId) return Promise.resolve()
+  // History already in this tab: show it, and only attach again if Hermes
+  // let the runtime go (leaving the chat, or a reconnect). Don't refetch
+  // the transcript; that was painting a loader over messages already here.
+  if (chat.ready) {
+    if (!chat.runtimeId) void open(id)
+    return Promise.resolve()
+  }
   const existing = opening.get(id)
   if (existing) return existing
   if (!chat.named) void readTitle(id, profile)
   const task = (async () => {
     try {
-      if (!chat.ready && !(await readHistory(id, profile, speaker))) return
+      if (!(await readHistory(id, profile, speaker))) return
       await open(id)
     } finally {
       opening.delete(id)

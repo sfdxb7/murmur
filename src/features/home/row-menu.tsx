@@ -3,6 +3,7 @@ import { AnimatePresence, motion, type HTMLMotionProps } from 'motion/react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { createLongPress, HOLD_MS, type LongPressAt } from './long-press'
 import { menuItem, menuKeys } from './new-menu'
 
 // A row's context menu, hung from the row itself: touch and hold, right-click,
@@ -221,41 +222,15 @@ function Panel(props: HTMLMotionProps<'div'>) {
 
 /**
  * Touch-and-hold (or right-click) opens the menu; the tap that ends a hold
- * doesn't navigate. A mouse's right-click says where it was.
+ * doesn't navigate. A mouse's right-click says where it was. The hold itself
+ * is in long-press.ts: 500ms, cancelled by a move or a scroll, one open on
+ * Android where the timer and contextmenu both fire, and no click after.
  */
-export function useLongPress(onLongPress: (at?: { x: number; y: number }) => void, ms = 450) {
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const origin = useRef<{ x: number; y: number }>(undefined)
-  const fired = useRef(false)
-  const mouse = useRef(false)
-  const cancel = () => clearTimeout(timer.current)
-  useEffect(() => cancel, [])
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      fired.current = false
-      mouse.current = e.pointerType === 'mouse'
-      if (mouse.current) return
-      origin.current = { x: e.clientX, y: e.clientY }
-      timer.current = setTimeout(() => {
-        fired.current = true
-        navigator.vibrate?.(8)
-        onLongPress()
-      }, ms)
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      if (origin.current && Math.hypot(e.clientX - origin.current.x, e.clientY - origin.current.y) > 8) cancel()
-    },
-    onPointerUp: cancel,
-    onPointerCancel: cancel,
-    onClick: (e: React.MouseEvent) => {
-      if (fired.current) e.preventDefault()
-      fired.current = false
-    },
-    onContextMenu: (e: React.MouseEvent) => {
-      e.preventDefault()
-      cancel()
-      // (A menu key's has no pointer to go by.)
-      onLongPress(mouse.current && (e.clientX || e.clientY) ? { x: e.clientX, y: e.clientY } : undefined)
-    },
-  }
+export function useLongPress(onLongPress: (at?: LongPressAt) => void, ms = HOLD_MS) {
+  const opened = useRef(onLongPress)
+  opened.current = onLongPress
+  const press = useRef<ReturnType<typeof createLongPress>>(undefined)
+  press.current ??= createLongPress((at) => opened.current(at), ms)
+  useEffect(() => () => press.current?.dispose(), [])
+  return press.current.handlers
 }
