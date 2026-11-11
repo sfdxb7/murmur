@@ -360,13 +360,20 @@ function plain(row: Row): Row {
 const PAGE = 500
 
 /**
+ * What a chat shows first. A long chat's newest page of 500 was hundreds of
+ * kilobytes before anything painted. Older rows still load as you scroll back,
+ * a full page at a time, and catching up still reads a full page.
+ */
+const FIRST_PAGE = 150
+
+/**
  * A chat's saved rows, oldest first: its newest page, or the one `offset`
  * rows back from its end. Every message, including the ones Hermes has
  * since summarized for the model (its own clients read them the same way).
  */
-async function readRows(id: string, profile: string, offset = 0) {
+async function readRows(id: string, profile: string, offset = 0, limit = PAGE) {
   type Res = { messages?: Row[]; data?: Row[] }
-  const query = `profile=${encodeURIComponent(profile)}&order=latest&limit=${PAGE}&include_compacted=true`
+  const query = `profile=${encodeURIComponent(profile)}&order=latest&limit=${limit}&include_compacted=true`
   const res = await api.get<Res>(
     `/api/sessions/${encodeURIComponent(id)}/messages?${query}${offset ? `&offset=${offset}` : ''}`,
   )
@@ -549,11 +556,13 @@ async function readHistory(id: string, profile: string, speaker?: Speaker) {
     try {
       // Hermes doesn't have it: new, or gone. Opening it says which.
       let missing = false
-      rows = await readRows(id, profile).catch((e): Row[] => {
+      rows = await readRows(id, profile, 0, FIRST_PAGE).catch((e): Row[] => {
         if (!(e instanceof HermesError && e.status === 404)) throw e
         missing = true
         return []
       })
+      // One long turn can fill the small page: undo and edit need the message that started it.
+      if (!missing && rows.length >= FIRST_PAGE && !rows.some((r) => r.role === 'user')) rows = await readRows(id, profile)
       if (missing) absent.add(id)
       else absent.delete(id)
       items = rowsToItems(rows, speaker)
@@ -572,7 +581,7 @@ async function readHistory(id: string, profile: string, speaker?: Speaker) {
       items: [...items, ...c.items.filter((i) => rowOf(i) == null || !saved.has(rowOf(i)))],
       ready: true,
       stalled: undefined,
-      older: rows.length >= PAGE,
+      older: rows.length >= (rows.length > FIRST_PAGE ? PAGE : FIRST_PAGE),
       told: c.told || rows.some((r) => r.role === 'user' && toldIn(r.content ?? '')),
     }))
     return true

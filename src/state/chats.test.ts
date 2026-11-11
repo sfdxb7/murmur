@@ -150,3 +150,30 @@ describe('Hermes summarizing a chat as you watch', () => {
     expect(getChat('other')!.items.some((i) => i.kind === 'compaction')).toBe(false)
   })
 })
+
+describe('opening a long chat', () => {
+  it('asks for the newest 150 rows first', async () => {
+    const messages = [row(1, 'user', 'Hi'), ...Array.from({ length: 149 }, (_, i) => row(i + 2, 'assistant', 'ok'))]
+    get.mockResolvedValueOnce({}).mockResolvedValueOnce({ messages })
+    await openChat('page', 'default')
+    const calls = get.mock.calls.map(([path]) => path as string).filter((path) => path.includes('/page/messages'))
+    expect(calls).toEqual([expect.stringContaining('limit=150')])
+    expect(calls[0]).toContain('include_compacted=true')
+    expect(getChat('page')!.older).toBe(true)
+    expect(said(getChat('page')!.items)[0]).toBe('user: Hi')
+  })
+
+  it('reads a full page when the first one is a turn with no user message', async () => {
+    const assistants = Array.from({ length: 150 }, (_, i) => row(i + 2, 'assistant', `step ${i}`))
+    get
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ messages: assistants })
+      .mockResolvedValueOnce({ messages: [row(1, 'user', 'Do the long one'), ...assistants.slice(0, 10)] })
+    await openChat('long', 'default')
+    const calls = get.mock.calls.map(([path]) => path as string).filter((path) => path.includes('/long/messages'))
+    expect(calls[0]).toContain('limit=150')
+    expect(calls[1]).toContain('limit=500')
+    expect(said(getChat('long')!.items)[0]).toBe('user: Do the long one')
+    expect(getChat('long')!.older).toBe(false)
+  })
+})
