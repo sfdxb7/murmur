@@ -9,12 +9,13 @@ import { ByUmbrel, MurmurMark, SOURCE_URL, UmbrelIcon } from '@/ui/brand'
 import { useIsWide } from '@/lib/use-media'
 import { api } from '@/hermes/rest'
 import { useConnection } from '@/hermes/gateway'
-import { useAgents, useAgentsAsTheyAre, type Agent } from '@/state/agents'
+import { agentHidden, useAgents, useAgentsAsTheyAre, type Agent } from '@/state/agents'
 import { modelName, useModels } from '@/state/models'
 import { Page, Tile } from '@/features/settings/page'
 import { Bone } from '@/features/home/bone'
 import { Stack } from '@/features/settings/stack'
 import { useAgentActions } from '@/features/home/actions'
+import { useSetAgentHidden } from '@/features/home/hide'
 import { useImportAgent } from '@/features/agents/import-agent'
 import { Spinner } from '@/ui/spinner'
 import { usePicturesSync } from '@/state/pictures'
@@ -257,32 +258,43 @@ const hostOf = (url: string) => {
   }
 }
 
-/** Every agent; a tap edits it right here. */
+/** Every agent; a tap edits it right here. Hidden ones wait in their own list, ready to come back. */
 function AgentsSection() {
   const { data, isPending } = useAgents()
   const actions = useAgentActions()
+  const setHidden = useSetAgentHidden()
   const importer = useImportAgent()
   const servers = useServers()
   if (isPending) return <Loading />
+  const visible = (data ?? []).filter((a) => !agentHidden(a))
+  const hidden = (data ?? []).filter(agentHidden)
   return (
     <>
-      {/* With several servers, each one's agents under its name. */}
-      {(servers.length > 1 ? servers : [undefined]).map((server) => (
-        <ListGroup key={server?.id ?? 'all'} title={server?.name}>
-          {(data ?? [])
-            .filter((a) => !server || hermesOf(a.id) === server.id)
-            .map((a) => (
-              <ListRow
-                key={a.id}
-                icon={<Orb hue={a.hue} size={28} seed={a.id} />}
-                title={a.name}
-                subtitle={subtitleFor(a)}
-                chevron
-                onClick={() => actions.edit(a)}
-              />
+      {/* With several servers, each one's visible agents under its name. */}
+      {(servers.length > 1 ? servers : [undefined]).map((server) => {
+        const rows = visible.filter((a) => !server || hermesOf(a.id) === server.id)
+        if (!rows.length) return null
+        return (
+          <ListGroup key={server?.id ?? 'all'} title={server?.name}>
+            {rows.map((a) => (
+              <AgentSettingRow key={a.id} agent={a} action="Hide" onAction={() => void setHidden(a, true)} onOpen={() => actions.edit(a)} />
             ))}
+          </ListGroup>
+        )
+      })}
+      {hidden.length > 0 && (
+        <ListGroup title="Hidden" footer="They stay off the home list on every device. Their chats are still there.">
+          {hidden.map((a) => (
+            <AgentSettingRow
+              key={a.id}
+              agent={a}
+              action="Unhide"
+              onAction={() => void setHidden(a, false)}
+              onOpen={() => actions.edit(a)}
+            />
+          ))}
         </ListGroup>
-      ))}
+      )}
       <ListGroup>
         <ListRow
           icon={
@@ -303,6 +315,46 @@ function AgentsSection() {
 
 const subtitleFor = (a: Agent) =>
   [a.isDefault ? 'Main agent' : a.role, a.model && modelName(a.model)].filter(Boolean).join(' · ')
+
+/** A settings row with its own action, so Hide and Unhide aren’t buried inside the editor. */
+function AgentSettingRow({
+  agent,
+  action,
+  onAction,
+  onOpen,
+}: {
+  agent: Agent
+  action: 'Hide' | 'Unhide'
+  onAction: () => void
+  onOpen: () => void
+}) {
+  return (
+    <div data-has-icon="" className="flex min-h-13 items-center pr-2">
+      <button
+        type="button"
+        onClick={onOpen}
+        title={agent.name}
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left transition-colors select-none hover:bg-fill-1 focus-visible:-outline-offset-2 active:bg-fill-2"
+      >
+        <span className="flex size-7 flex-none items-center justify-center">
+          <Orb hue={agent.hue} size={28} seed={agent.id} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-body">{agent.name}</span>
+          <span className="block truncate text-footnote text-ink-2">{subtitleFor(agent)}</span>
+        </span>
+        <ChevronRight size={18} className="-mr-1.5 flex-none text-ink-3" />
+      </button>
+      <button
+        type="button"
+        onClick={onAction}
+        className="pressable flex-none rounded-full px-3 py-1.5 text-subhead font-medium text-accent select-none hover:bg-fill-2 active:bg-fill-3"
+      >
+        {action}
+      </button>
+    </div>
+  )
+}
 
 function AboutSection() {
   const [, navigate] = useLocation()

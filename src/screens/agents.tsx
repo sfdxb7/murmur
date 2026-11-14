@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { IconButton } from '@/ui/button'
 import { Skeleton } from '@/ui/skeleton'
 import { useIsWide } from '@/lib/use-media'
-import { useAgents, type Agent } from '@/state/agents'
+import { agentHidden, useAgents, visibleAgents, type Agent } from '@/state/agents'
 import { useBusyAgents } from '@/state/status'
 import { sectionOf, useSections } from '@/state/sections'
 import { useAgentActions } from '@/features/home/actions'
@@ -31,7 +31,9 @@ const grid = 'grid grid-cols-2 gap-3 min-[600px]:grid-cols-3 md:grid-cols-[repea
 let greeted = false
 
 export function AgentsScreen() {
-  const { data: agents, isPending } = useAgents()
+  const { data: everyone, isPending } = useAgents()
+  const agents = everyone && visibleAgents(everyone)
+  const hiddenCount = everyone?.filter(agentHidden).length ?? 0
   const busy = useBusyAgents()
   const wide = useIsWide()
   const actions = useAgentActions()
@@ -97,7 +99,12 @@ export function AgentsScreen() {
             </h1>
             {/* Holds its line while the count loads, so the gallery never jumps. */}
             <p className="mt-0.5 min-h-[1.375rem] text-subhead text-ink-2">
-              {sorted && (sorted.length === 1 ? 'One agent, ready when you are.' : `${sorted.length} agents, each with its own knack.`)}
+              {sorted &&
+                (sorted.length === 0 && hiddenCount > 0
+                  ? 'Every agent is hidden. Unhide one in Settings.'
+                  : sorted.length === 1
+                    ? 'One agent, ready when you are.'
+                    : `${sorted.length} agents, each with its own knack.`)}
             </p>
           </div>
 
