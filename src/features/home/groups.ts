@@ -1,6 +1,6 @@
 // Groups as roster rows, from the groups store (state/groups).
 
-import { useAgents, type Agent } from '@/state/agents'
+import { useVisibleAgents, type Agent } from '@/state/agents'
 import { byHermes, hermesOf } from '@/hermes/instance'
 import { useMemo } from 'react'
 import { createGroup as create, foldGroups, useGroupHosts, useGroupSummaries } from '@/state/groups'
@@ -74,7 +74,7 @@ export function useGroupRows(): GroupRow[] {
  */
 export function useGroupCandidates(): Agent[] {
   const hosts = useGroupHosts()
-  const { data: agents } = useAgents()
+  const { data: agents } = useVisibleAgents()
   return useMemo(() => {
     const on = byHermes((agents ?? []).map((a) => a.id))
     return (agents ?? []).filter((a) => {

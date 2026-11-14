@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { X } from 'lucide-react'
 import { Orb } from '@/ui/orb'
-import { useAgents } from '@/state/agents'
+import { useVisibleAgents } from '@/state/agents'
 import { sameHermes } from '@/hermes/instance'
 import { useGroupSummaries } from '@/state/groups'
 import { useSections } from '@/state/sections'
@@ -35,7 +35,7 @@ const spring = { type: 'spring', duration: 0.5, bounce: 0.15 } as const
 type Props = { density: Density; onNewAgent: () => void; onNewGroup?: () => void; onNewSection?: () => void }
 
 export function Suggestion({ density, onNewAgent, onNewGroup, onNewSection }: Props) {
-  const { data: agents } = useAgents()
+  const { data: agents } = useVisibleAgents()
   const groups = useGroupRows()
   // Until groups have loaded, "Start a group" would claim there are none.
   const groupsLoaded = !useGroupSummaries().isPending
